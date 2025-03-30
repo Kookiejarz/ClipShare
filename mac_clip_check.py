@@ -2,6 +2,7 @@ import AppKit
 import time
 import asyncio
 import websockets
+import json  # 添加这一行
 from clipshare.security.crypto import SecurityManager
 from clipshare.network.discovery import DeviceDiscovery
 
@@ -26,16 +27,48 @@ class ClipboardListener:
 
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
-        self.connected_clients.add(websocket)
         try:
-            # Receive and process messages from this client
+            # 首先接收身份验证信息（这是一个JSON字符串）
+            auth_message = await websocket.recv()
+            
+            # 解析身份验证信息
+            try:
+                if isinstance(auth_message, str):
+                    auth_info = json.loads(auth_message)
+                else:
+                    auth_info = json.loads(auth_message.decode('utf-8'))
+                    
+                device_id = auth_info.get('identity')
+                signature = auth_info.get('signature')
+                
+                print(f"📱 设备 {device_id} 尝试连接")
+                
+                # 这里可以添加实际的验证逻辑
+                # 目前简单通过，实际项目中应该做真正的验证
+                
+            except json.JSONDecodeError:
+                print("❌ 无效的身份验证信息")
+                return
+            
+            # 发送身份验证成功响应
+            await websocket.send(json.dumps({
+                'status': 'authorized',
+                'server_id': 'mac-server'
+            }))
+            
+            # 身份验证通过，添加到客户端列表
+            self.connected_clients.add(websocket)
+            print(f"✅ 设备 {device_id} 已连接")
+            
+            # 之后接收的都是二进制加密数据
             while True:
                 encrypted_data = await websocket.recv()
                 await self.process_received_data(encrypted_data)
         except websockets.exceptions.ConnectionClosed:
             print("📴 客户端断开连接")
         finally:
-            self.connected_clients.remove(websocket)
+            if websocket in self.connected_clients:
+                self.connected_clients.remove(websocket)
 
     async def process_received_data(self, encrypted_data):
         """处理从 Windows 接收到的加密数据"""
@@ -43,6 +76,11 @@ class ClipboardListener:
             self.is_receiving = True
             decrypted_data = self.security_mgr.decrypt_message(encrypted_data)
             content = decrypted_data.decode('utf-8')
+            
+            # 显示收到的内容（限制字符数以防内容过长）
+            max_display_len = 100
+            display_content = content if len(content) <= max_display_len else content[:max_display_len] + "..."
+            print(f"📥 收到内容: \"{display_content}\"")
             
             # Set to Mac clipboard
             pasteboard = AppKit.NSPasteboard.generalPasteboard()
@@ -59,13 +97,29 @@ class ClipboardListener:
 
     async def broadcast_encrypted_data(self, encrypted_data):
         """广播加密数据到所有连接的客户端"""
-        if self.connected_clients:
-            websockets.broadcast(self.connected_clients, encrypted_data)
+        if not self.connected_clients:
+            return
+        
+        print(f"📢 广播数据 ({len(encrypted_data)} 字节) 到 {len(self.connected_clients)} 个客户端")
+        
+        for client in self.connected_clients:
+            try:
+                # 确保以二进制格式发送
+                await client.send(encrypted_data)
+            except Exception as e:
+                print(f"❌ 发送到客户端失败: {e}")
 
     async def start_server(self, port=8765):
         """启动 WebSocket 服务器"""
-        server = await websockets.serve(self.handle_client, "0.0.0.0", port)
-        self.discovery.start_advertising(port)
+        # 指定 websockets 使用二进制模式
+        server = await websockets.serve(
+            self.handle_client, 
+            "0.0.0.0", 
+            port,
+            # 设置为二进制模式
+            subprotocols=["binary"]
+        )
+        await self.discovery.start_advertising(port)
         print(f"🌐 WebSocket 服务器启动在端口 {port}")
         await server.wait_closed()
 
@@ -86,12 +140,22 @@ class ClipboardListener:
         try:
             if AppKit.NSPasteboardTypeString in types:
                 text = self.pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
+                
+                # 显示发送的内容（限制字符数）
+                max_display_len = 100
+                display_content = text if len(text) <= max_display_len else text[:max_display_len] + "..."
+                print(f"📤 发送内容: \"{display_content}\"")
+                
                 encrypted_data = self.security_mgr.encrypt_message(text.encode('utf-8'))
-                print("🔐 加密后的文本", encrypted_data)
+                print("🔐 加密后的文本")
                 await self.broadcast_encrypted_data(encrypted_data)
 
             if AppKit.NSPasteboardTypeFileURL in types:
                 file_urls = self.pasteboard.propertyListForType_(AppKit.NSPasteboardTypeFileURL)
+                
+                # 显示发送的文件路径
+                print(f"📤 发送文件路径: {file_urls}")
+                
                 encrypted_data = self.security_mgr.encrypt_message(str(file_urls).encode('utf-8'))
                 print("🔐 加密后的文件路径")
                 await self.broadcast_encrypted_data(encrypted_data)

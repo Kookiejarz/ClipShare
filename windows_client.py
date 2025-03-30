@@ -1,14 +1,15 @@
 import asyncio
 import websockets
 import pyperclip
+import json
 import time
 from clipshare.security.crypto import SecurityManager
-from clipshare.network.discovery import DeviceDiscovery  # 改为 DeviceDiscovery
+from clipshare.network.discovery import DeviceDiscovery
 
 class WindowsClipboardClient:
     def __init__(self):
         self.security_mgr = SecurityManager()
-        self.discovery = DeviceDiscovery()  # 改为 DeviceDiscovery
+        self.discovery = DeviceDiscovery()
         self._init_encryption()
         self.ws_url = None
         self.last_clipboard_content = pyperclip.paste()
@@ -17,7 +18,8 @@ class WindowsClipboardClient:
     def _init_encryption(self):
         try:
             self.security_mgr.generate_key_pair()
-            self.security_mgr.generate_temporary_shared_key()
+            # 使用固定的密码
+            self.security_mgr.set_shared_key_from_password("clipshare-test-key-2023")
             print("✅ 加密系统初始化成功")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
@@ -35,13 +37,44 @@ class WindowsClipboardClient:
             
         print(f"🔌 连接到服务器: {self.ws_url}")
         
-        async with websockets.connect(self.ws_url) as websocket:
-            # Start tasks for both sending and receiving
-            send_task = asyncio.create_task(self.send_clipboard_changes(websocket))
-            receive_task = asyncio.create_task(self.receive_clipboard_changes(websocket))
-            
-            # Wait for either task to complete (or be cancelled)
-            await asyncio.gather(send_task, receive_task)
+        try:
+            # 指定二进制子协议
+            async with websockets.connect(
+                self.ws_url,
+                subprotocols=["binary"]
+            ) as websocket:
+                # 发送身份验证信息
+                auth_info = {
+                    'identity': 'windows-client',  # 在实际应用中应该使用真实唯一ID
+                    'signature': 'dummy-signature' # 实际应用中应使用真正的签名
+                }
+                await websocket.send(json.dumps(auth_info))
+                
+                # 等待身份验证响应
+                try:
+                    auth_response = await websocket.recv()
+                    if isinstance(auth_response, bytes):
+                        auth_response = auth_response.decode('utf-8')
+                    
+                    response_data = json.loads(auth_response)
+                    if response_data.get('status') == 'authorized':
+                        print(f"✅ 身份验证成功! 服务器: {response_data.get('server_id', '未知')}")
+                    else:
+                        print(f"❌ 身份验证失败: {response_data.get('reason', '未知原因')}")
+                        return
+                except Exception as e:
+                    print(f"❌ 身份验证过程出错: {e}")
+                    return
+                
+                # Start tasks for both sending and receiving
+                send_task = asyncio.create_task(self.send_clipboard_changes(websocket))
+                receive_task = asyncio.create_task(self.receive_clipboard_changes(websocket))
+                
+                # Wait for either task to complete (or be cancelled)
+                await asyncio.gather(send_task, receive_task)
+        except Exception as e:
+            print(f"❌ 连接错误: {e}")
+            await asyncio.sleep(3)  # 等待一段时间后重试
     
     async def send_clipboard_changes(self, websocket):
         """Monitor and send clipboard changes to Mac"""
@@ -49,7 +82,11 @@ class WindowsClipboardClient:
             try:
                 current_content = pyperclip.paste()
                 if current_content != self.last_clipboard_content and not self.is_receiving:
-                    print("📤 发送剪贴板内容...")
+                    # 显示发送的内容（限制字符数）
+                    max_display_len = 100
+                    display_content = current_content if len(current_content) <= max_display_len else current_content[:max_display_len] + "..."
+                    print(f"📤 发送内容: \"{display_content}\"")
+                    
                     # Encrypt and send content
                     encrypted_data = self.security_mgr.encrypt_message(current_content.encode('utf-8'))
                     await websocket.send(encrypted_data)
@@ -63,37 +100,53 @@ class WindowsClipboardClient:
         """Receive clipboard changes from Mac"""
         while True:
             try:
-                encrypted_data = await websocket.recv()
-                # Set flag to prevent loop
+                # 接收数据 - 可能是二进制或文本
+                received_data = await websocket.recv()
                 self.is_receiving = True
                 
-                # Decrypt data
+                # 确保数据是二进制格式
+                if isinstance(received_data, str):
+                    # 如果是JSON字符串，可能需要解析
+                    if received_data.startswith('{'):
+                        try:
+                            data_obj = json.loads(received_data)
+                            if 'encrypted_data' in data_obj:
+                                # 从JSON提取并转换为bytes
+                                import base64
+                                encrypted_data = base64.b64decode(data_obj['encrypted_data'])
+                            else:
+                                print("❌ 收到无效的JSON数据")
+                                continue
+                        except json.JSONDecodeError:
+                            print("❌ 无效的JSON格式")
+                            continue
+                    else:
+                        # 普通字符串，直接使用UTF-8编码转为bytes
+                        encrypted_data = received_data.encode('utf-8')
+                else:
+                    # 已经是bytes类型
+                    encrypted_data = received_data
+                
+                # 解密数据
                 decrypted_data = self.security_mgr.decrypt_message(encrypted_data)
                 content = decrypted_data.decode('utf-8')
                 
-                # Update clipboard
+                # 显示收到的内容（限制字符数以防内容过长）
+                max_display_len = 100
+                display_content = content if len(content) <= max_display_len else content[:max_display_len] + "..."
+                print(f"📥 收到内容: \"{display_content}\"")
+                
+                # 更新剪贴板
                 pyperclip.copy(content)
                 self.last_clipboard_content = content
-                print("📋 已更新剪贴板内容")
+                print("📋 已更新剪贴板")
                 
-                # Reset flag after a short delay
+                # 延迟后重置标志
                 await asyncio.sleep(0.5)
                 self.is_receiving = False
             except Exception as e:
                 print(f"❌ 接收错误: {e}")
-
-# 添加 start_discovery 方法到 DeviceDiscovery 类中
-class DeviceDiscovery:
-    # ... 现有代码 ...
-    
-    def start_discovery(self, callback):
-        """Discover clipboard services on the network."""
-        self.browser = ServiceBrowser(
-            self.zeroconf, 
-            self.service_name,
-            ClipboardServiceListener(callback)
-        )
-        print("🔍 开始搜索剪贴板服务...")
+                await asyncio.sleep(1)  # 出错后等待一段时间再继续
 
 def main():
     client = WindowsClipboardClient()

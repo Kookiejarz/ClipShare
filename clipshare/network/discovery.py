@@ -33,6 +33,8 @@ class DeviceDiscovery:
     async def start_advertising(self, port):
         """Advertise this device on the network."""
         ip_addr = self._get_local_ip()
+        print(f"🌐 使用IP地址 {ip_addr} 和端口 {port} 注册服务")
+        
         info = ServiceInfo(
             self.service_name,
             f"Device_{socket.gethostname()}.{self.service_name}",
@@ -41,9 +43,21 @@ class DeviceDiscovery:
             properties={},
         )
         
+        print(f"📢 广播服务: {self.service_name}")
+        print(f"📛 服务名称: Device_{socket.gethostname()}.{self.service_name}")
+        
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(self._executor, self.zeroconf.register_service, info)
         print("✅ 服务注册成功")
+
+    def start_discovery(self, callback):
+        """Discover clipboard services on the network."""
+        self.browser = ServiceBrowser(
+            self.zeroconf, 
+            self.service_name,
+            ClipboardServiceListener(callback)
+        )
+        print("🔍 开始搜索剪贴板服务...")
 
     def _get_local_ip(self):
         """Get the local IP address."""
@@ -57,5 +71,7 @@ class DeviceDiscovery:
 
     def close(self):
         """Clean up resources."""
-        self.zeroconf.close()
-        self._executor.shutdown()
+        if hasattr(self, 'zeroconf'):
+            self.zeroconf.close()
+        if hasattr(self, '_executor'):
+            self._executor.shutdown()
