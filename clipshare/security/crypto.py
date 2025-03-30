@@ -57,3 +57,16 @@ class SecurityManager:
         except Exception as e:
             print(f"加密失败: {e}")
             raise
+
+    def decrypt_message(self, encrypted_data: bytes) -> bytes:
+        """Decrypt a message using AES-256-GCM."""
+        if not self.shared_key:
+            raise ValueError("Shared key not established")
+        try:
+            nonce = encrypted_data[:12]
+            ciphertext = encrypted_data[12:]
+            aesgcm = AESGCM(self.shared_key)
+            return aesgcm.decrypt(nonce, ciphertext, None)
+        except Exception as e:
+            print(f"解密失败: {e}")
+            raise

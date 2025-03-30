@@ -13,6 +13,7 @@ class ClipboardListener:
         self.connected_clients = set()
         self.discovery = DeviceDiscovery()
         self._init_encryption()
+        self.is_receiving = False  # Flag to avoid clipboard loops
 
     def _init_encryption(self):
         """初始化加密系统"""
@@ -27,9 +28,34 @@ class ClipboardListener:
         """处理 WebSocket 客户端连接"""
         self.connected_clients.add(websocket)
         try:
-            await websocket.wait_closed()
+            # Receive and process messages from this client
+            while True:
+                encrypted_data = await websocket.recv()
+                await self.process_received_data(encrypted_data)
+        except websockets.exceptions.ConnectionClosed:
+            print("📴 客户端断开连接")
         finally:
             self.connected_clients.remove(websocket)
+
+    async def process_received_data(self, encrypted_data):
+        """处理从 Windows 接收到的加密数据"""
+        try:
+            self.is_receiving = True
+            decrypted_data = self.security_mgr.decrypt_message(encrypted_data)
+            content = decrypted_data.decode('utf-8')
+            
+            # Set to Mac clipboard
+            pasteboard = AppKit.NSPasteboard.generalPasteboard()
+            pasteboard.clearContents()
+            pasteboard.setString_forType_(content, AppKit.NSPasteboardTypeString)
+            self.last_change_count = pasteboard.changeCount()
+            print("📋 已从 Windows 更新剪贴板")
+            
+            # Reset flag after a short delay
+            await asyncio.sleep(0.5)
+            self.is_receiving = False
+        except Exception as e:
+            print(f"❌ 接收数据处理错误: {e}")
 
     async def broadcast_encrypted_data(self, encrypted_data):
         """广播加密数据到所有连接的客户端"""
@@ -47,10 +73,11 @@ class ClipboardListener:
         """轮询检查剪贴板内容变化"""
         print("🔐 加密剪贴板监听已启动...")
         while True:
-            new_change_count = self.pasteboard.changeCount()
-            if new_change_count != self.last_change_count:
-                self.last_change_count = new_change_count
-                await self.process_clipboard()
+            if not self.is_receiving:  # Only check if not currently receiving
+                new_change_count = self.pasteboard.changeCount()
+                if new_change_count != self.last_change_count:
+                    self.last_change_count = new_change_count
+                    await self.process_clipboard()
             await asyncio.sleep(.3)
 
     async def process_clipboard(self):
