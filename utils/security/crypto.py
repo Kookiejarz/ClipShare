@@ -1,8 +1,9 @@
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import os
+import base64
 
 class SecurityManager:
     def __init__(self):
@@ -24,6 +25,27 @@ class SecurityManager:
         """Check if shared key exists"""
         return self.shared_key is not None
 
+    def serialize_public_key(self):
+        """Serialize public key for transmission"""
+        if not self.public_key:
+            raise ValueError("No public key available")
+        
+        serialized = self.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        return base64.b64encode(serialized).decode('utf-8')
+
+    def deserialize_public_key(self, key_data):
+        """Deserialize a received public key"""
+        try:
+            key_bytes = base64.b64decode(key_data)
+            peer_public_key = serialization.load_pem_public_key(key_bytes)
+            return peer_public_key
+        except Exception as e:
+            print(f"公钥反序列化失败: {e}")
+            raise
+
     # For testing purposes only
     def generate_temporary_shared_key(self):
         """Generate a temporary shared key for testing"""
@@ -40,7 +62,10 @@ class SecurityManager:
             raise
 
     def generate_shared_key(self, peer_public_key):
-        """Generate shared key using ECDH."""
+        """Generate shared key using ECDH"""
+        if not self.private_key:
+            raise ValueError("No private key available")
+            
         shared_key = self.private_key.exchange(ec.ECDH(), peer_public_key)
         self.shared_key = HKDF(
             algorithm=hashes.SHA256(),
@@ -48,6 +73,7 @@ class SecurityManager:
             salt=None,
             info=b'handshake data',
         ).derive(shared_key)
+        print(f"🔑 ECDH密钥交换成功，前8字节: {self.shared_key[:8].hex()}")
         return self.shared_key
 
     def set_shared_key_from_password(self, password: str):

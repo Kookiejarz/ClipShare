@@ -2,7 +2,6 @@ import asyncio
 import websockets
 import pyperclip
 import json
-import time
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
 
@@ -19,7 +18,7 @@ class WindowsClipboardClient:
         try:
             self.security_mgr.generate_key_pair()
             # 使用固定的密码
-            self.security_mgr.set_shared_key_from_password("clipshare-test-key-2023")
+            #self.security_mgr.set_shared_key_from_password("clipshare-test-key-2023")
             print("✅ 加密系统初始化成功")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
@@ -64,6 +63,11 @@ class WindowsClipboardClient:
                         return
                 except Exception as e:
                     print(f"❌ 身份验证过程出错: {e}")
+                    return
+                
+                # 执行密钥交换
+                if not await self.perform_key_exchange(websocket):
+                    print("❌ 密钥交换失败，断开连接")
                     return
                 
                 # Start tasks for both sending and receiving
@@ -147,6 +151,52 @@ class WindowsClipboardClient:
             except Exception as e:
                 print(f"❌ 接收错误: {e}")
                 await asyncio.sleep(1)  # 出错后等待一段时间再继续
+
+    async def perform_key_exchange(self, websocket):
+        """Execute key exchange with server"""
+        try:
+            # Generate key pair if needed
+            if not self.security_mgr.public_key:
+                self.security_mgr.generate_key_pair()
+            
+            # Wait for server's public key
+            server_key_message = await websocket.recv()
+            server_data = json.loads(server_key_message)
+            
+            if server_data.get("type") != "key_exchange":
+                print("❌ 服务器未发送公钥")
+                return False
+            
+            # Deserialize server's public key
+            server_key_data = server_data.get("public_key")
+            server_public_key = self.security_mgr.deserialize_public_key(server_key_data)
+            
+            # Send our public key
+            client_public_key = self.security_mgr.serialize_public_key()
+            await websocket.send(json.dumps({
+                "type": "key_exchange",
+                "public_key": client_public_key
+            }))
+            print("📤 已发送客户端公钥")
+            
+            # Generate shared key
+            self.security_mgr.generate_shared_key(server_public_key)
+            print("🔒 密钥交换完成，已建立共享密钥")
+            
+            # Wait for confirmation
+            confirmation = await websocket.recv()
+            confirm_data = json.loads(confirmation)
+            
+            if confirm_data.get("type") == "key_exchange_complete":
+                print("✅ 服务器确认密钥交换成功")
+                return True
+            else:
+                print("⚠️ 没有收到服务器的密钥交换确认")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 密钥交换失败: {e}")
+            return False
 
 def main():
     client = WindowsClipboardClient()
