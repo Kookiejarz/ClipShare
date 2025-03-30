@@ -3,6 +3,7 @@ import asyncio
 import websockets
 import json 
 from utils.security.crypto import SecurityManager
+from utils.security.auth import DeviceAuthManager
 from utils.network.discovery import DeviceDiscovery
 
 class ClipboardListener:
@@ -10,6 +11,7 @@ class ClipboardListener:
         self.pasteboard = AppKit.NSPasteboard.generalPasteboard()
         self.last_change_count = self.pasteboard.changeCount()
         self.security_mgr = SecurityManager()
+        self.auth_mgr = DeviceAuthManager()
         self.connected_clients = set()
         self.discovery = DeviceDiscovery()
         self._init_encryption()
@@ -18,14 +20,15 @@ class ClipboardListener:
     def _init_encryption(self):
         """初始化加密系统"""
         try:
+            # 只生成密钥对，不使用临时共享密钥
             self.security_mgr.generate_key_pair()
-            self.security_mgr.generate_temporary_shared_key()
             print("✅ 加密系统初始化成功")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
 
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
+        device_id = None
         try:
             # 首先接收身份验证信息
             auth_message = await websocket.recv()
@@ -37,20 +40,54 @@ class ClipboardListener:
                 else:
                     auth_info = json.loads(auth_message.decode('utf-8'))
                     
-                device_id = auth_info.get('identity')
-                signature = auth_info.get('signature')
+                device_id = auth_info.get('identity', 'unknown-device')
+                signature = auth_info.get('signature', '')
+                is_first_time = auth_info.get('first_time', False)
                 
                 print(f"📱 设备 {device_id} 尝试连接")
                 
+                # 处理首次连接的设备
+                if is_first_time:
+                    print(f"🆕 设备 {device_id} 首次连接，授权中...")
+                    token = self.auth_mgr.authorize_device(device_id, {
+                        "name": auth_info.get("device_name", "未命名设备"),
+                        "platform": auth_info.get("platform", "未知平台")
+                    })
+                    
+                    # 发送授权令牌给客户端
+                    await websocket.send(json.dumps({
+                        'status': 'first_authorized',
+                        'server_id': 'mac-server',
+                        'token': token
+                    }))
+                    print(f"✅ 已授权设备 {device_id} 并发送令牌")
+                    
+                else:
+                    # 验证现有设备
+                    print(f"🔐 验证设备 {device_id} 的签名")
+                    is_valid = self.auth_mgr.validate_device(device_id, signature)
+                    if not is_valid:
+                        print(f"❌ 设备 {device_id} 验证失败")
+                        await websocket.send(json.dumps({
+                            'status': 'unauthorized',
+                            'reason': 'Invalid signature or unknown device'
+                        }))
+                        return
+                        
+                    # 发送授权成功响应
+                    await websocket.send(json.dumps({
+                        'status': 'authorized',
+                        'server_id': 'mac-server'
+                    }))
+                    print(f"✅ 设备 {device_id} 验证成功")
+                
             except json.JSONDecodeError:
                 print("❌ 无效的身份验证信息")
+                await websocket.send(json.dumps({
+                    'status': 'error',
+                    'reason': 'Invalid authentication format'
+                }))
                 return
-            
-            # 发送身份验证成功响应
-            await websocket.send(json.dumps({
-                'status': 'authorized',
-                'server_id': 'mac-server'
-            }))
             
             # 执行密钥交换
             if not await self.perform_key_exchange(websocket):
@@ -66,7 +103,7 @@ class ClipboardListener:
                 encrypted_data = await websocket.recv()
                 await self.process_received_data(encrypted_data)
         except websockets.exceptions.ConnectionClosed:
-            print("📴 客户端断开连接")
+            print(f"📴 设备 {device_id or '未知设备'} 断开连接")
         finally:
             if websocket in self.connected_clients:
                 self.connected_clients.remove(websocket)

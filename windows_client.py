@@ -2,6 +2,10 @@ import asyncio
 import websockets
 import pyperclip
 import json
+import os
+import hmac
+import hashlib
+from pathlib import Path
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
 
@@ -13,12 +17,61 @@ class WindowsClipboardClient:
         self.ws_url = None
         self.last_clipboard_content = pyperclip.paste()
         self.is_receiving = False  # Flag to avoid clipboard loops
+        self.device_id = self._get_device_id()
+        self.device_token = self._load_device_token()
+        
+    def _get_device_id(self):
+        """获取唯一设备ID"""
+        import socket
+        # 使用主机名和MAC地址组合作为设备ID
+        try:
+            hostname = socket.gethostname()
+            # 获取第一个网络接口的MAC地址
+            import uuid
+            mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) 
+                           for elements in range(0, 8*6, 8)][::-1])
+            return f"{hostname}-{mac}"
+        except:
+            # 如果获取失败，生成一个随机ID
+            import random
+            return f"windows-{random.randint(10000, 99999)}"
+    
+    def _get_token_path(self):
+        """获取令牌存储路径"""
+        home_dir = Path.home()
+        token_dir = home_dir / ".clipshare"
+        token_dir.mkdir(parents=True, exist_ok=True)
+        return token_dir / "device_token.txt"
+    
+    def _load_device_token(self):
+        """加载设备令牌"""
+        token_path = self._get_token_path()
+        if token_path.exists():
+            with open(token_path, "r") as f:
+                return f.read().strip()
+        return None
+    
+    def _save_device_token(self, token):
+        """保存设备令牌"""
+        token_path = self._get_token_path()
+        with open(token_path, "w") as f:
+            f.write(token)
+        print(f"💾 设备令牌已保存到 {token_path}")
+    
+    def _generate_signature(self):
+        """生成签名"""
+        if not self.device_token:
+            return ""
+        
+        return hmac.new(
+            self.device_token.encode(), 
+            self.device_id.encode(), 
+            hashlib.sha256
+        ).hexdigest()
 
     def _init_encryption(self):
         try:
             self.security_mgr.generate_key_pair()
-            # 使用固定的密码
-            #self.security_mgr.set_shared_key_from_password("clipshare-test-key-2023")
             print("✅ 加密系统初始化成功")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
@@ -43,10 +96,17 @@ class WindowsClipboardClient:
                 subprotocols=["binary"]
             ) as websocket:
                 # 发送身份验证信息
+                is_first_time = self.device_token is None
+                
                 auth_info = {
-                    'identity': 'windows-client',  # 在实际应用中应该使用真实唯一ID
-                    'signature': 'dummy-signature' # 实际应用中应使用真正的签名
+                    'identity': self.device_id,
+                    'signature': self._generate_signature(),
+                    'first_time': is_first_time,
+                    'device_name': os.environ.get('COMPUTERNAME', 'Windows设备'),
+                    'platform': 'windows'
                 }
+                
+                print(f"🔑 {'首次连接' if is_first_time else '已注册设备'} ID: {self.device_id}")
                 await websocket.send(json.dumps(auth_info))
                 
                 # 等待身份验证响应
@@ -56,8 +116,19 @@ class WindowsClipboardClient:
                         auth_response = auth_response.decode('utf-8')
                     
                     response_data = json.loads(auth_response)
-                    if response_data.get('status') == 'authorized':
+                    status = response_data.get('status')
+                    
+                    if status == 'authorized':
                         print(f"✅ 身份验证成功! 服务器: {response_data.get('server_id', '未知')}")
+                    elif status == 'first_authorized':
+                        token = response_data.get('token')
+                        if token:
+                            self._save_device_token(token)
+                            self.device_token = token
+                            print(f"🆕 设备已授权并获取令牌")
+                        else:
+                            print(f"❌ 服务器未提供令牌")
+                            return
                     else:
                         print(f"❌ 身份验证失败: {response_data.get('reason', '未知原因')}")
                         return
@@ -79,6 +150,8 @@ class WindowsClipboardClient:
         except Exception as e:
             print(f"❌ 连接错误: {e}")
             await asyncio.sleep(3)  # 等待一段时间后重试
+            # 重新尝试连接
+            await self.sync_clipboard()
     
     async def send_clipboard_changes(self, websocket):
         """Monitor and send clipboard changes to Mac"""
