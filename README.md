@@ -96,7 +96,7 @@ pip install -r requirements.txt
 - Windows 权限问题可能阻止写入剪贴板，尝试以 **管理员权限** 运行。
 
 ## 许可证
-MIT © 2025 ClipShare Developers
+MIT © 2025 Yunheng Liu
 
 ## 致谢
 - **Zeroconf** 提供的网络服务发现
