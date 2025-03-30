@@ -1,8 +1,7 @@
 import AppKit
-import time
 import asyncio
 import websockets
-import json  # 添加这一行
+import json 
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
 
@@ -28,7 +27,7 @@ class ClipboardListener:
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
         try:
-            # 首先接收身份验证信息（这是一个JSON字符串）
+            # 首先接收身份验证信息
             auth_message = await websocket.recv()
             
             # 解析身份验证信息
@@ -43,9 +42,6 @@ class ClipboardListener:
                 
                 print(f"📱 设备 {device_id} 尝试连接")
                 
-                # 这里可以添加实际的验证逻辑
-                # 目前简单通过，实际项目中应该做真正的验证
-                
             except json.JSONDecodeError:
                 print("❌ 无效的身份验证信息")
                 return
@@ -56,9 +52,14 @@ class ClipboardListener:
                 'server_id': 'mac-server'
             }))
             
-            # 身份验证通过，添加到客户端列表
+            # 执行密钥交换
+            if not await self.perform_key_exchange(websocket):
+                print("❌ 密钥交换失败，断开连接")
+                return
+            
+            # 身份验证和密钥交换都通过，添加到客户端列表
             self.connected_clients.add(websocket)
-            print(f"✅ 设备 {device_id} 已连接")
+            print(f"✅ 设备 {device_id} 已连接并完成密钥交换")
             
             # 之后接收的都是二进制加密数据
             while True:
@@ -165,6 +166,47 @@ class ClipboardListener:
 
         except Exception as e:
             print(f"❌ 加密错误: {e}")
+
+    async def perform_key_exchange(self, websocket):
+        """Perform key exchange with client"""
+        try:
+            # Generate and send our public key
+            if not self.security_mgr.public_key:
+                self.security_mgr.generate_key_pair()
+            
+            server_public_key = self.security_mgr.serialize_public_key()
+            key_message = json.dumps({
+                "type": "key_exchange",
+                "public_key": server_public_key
+            })
+            await websocket.send(key_message)
+            print("📤 已发送服务器公钥")
+            
+            # Receive client's public key
+            response = await websocket.recv()
+            client_data = json.loads(response)
+            
+            if client_data.get("type") == "key_exchange":
+                client_key_data = client_data.get("public_key")
+                client_public_key = self.security_mgr.deserialize_public_key(client_key_data)
+                
+                # Generate shared key
+                self.security_mgr.generate_shared_key(client_public_key)
+                print("🔒 密钥交换完成，已建立共享密钥")
+                
+                # Send confirmation
+                await websocket.send(json.dumps({
+                    "type": "key_exchange_complete",
+                    "status": "success"
+                }))
+                return True
+            else:
+                print("❌ 客户端未发送公钥")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 密钥交换失败: {e}")
+            return False
 
 async def main():
     listener = ClipboardListener()
