@@ -49,6 +49,7 @@ class ClipboardListener:
             # 发送身份验证成功响应
             await websocket.send(json.dumps({
                 'status': 'authorized',
+                
                 'server_id': 'mac-server'
             }))
             
