@@ -2,7 +2,6 @@
 
 ![ClipShare](https://img.shields.io/badge/ClipShare-1.0.0-blue)
 ![Python](https://img.shields.io/badge/Python-3.7+-green)
-![License](https://img.shields.io/badge/License-MIT-orange)
 
 ClipShare 是一个端到端加密的跨平台剪贴板同步工具，支持 Mac 和 Windows 设备之间安全地共享剪贴板内容。
 
