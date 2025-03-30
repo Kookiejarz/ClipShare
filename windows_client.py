@@ -2,7 +2,6 @@ import asyncio
 import websockets
 import pyperclip
 import json
-import time
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
 
