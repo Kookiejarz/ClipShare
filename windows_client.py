@@ -3,12 +3,12 @@ import websockets
 import pyperclip
 import time
 from clipshare.security.crypto import SecurityManager
-from clipshare.network.discovery import ServiceDiscovery
+from clipshare.network.discovery import DeviceDiscovery  # 改为 DeviceDiscovery
 
 class WindowsClipboardClient:
     def __init__(self):
         self.security_mgr = SecurityManager()
-        self.discovery = ServiceDiscovery()
+        self.discovery = DeviceDiscovery()  # 改为 DeviceDiscovery
         self._init_encryption()
         self.ws_url = None
         self.last_clipboard_content = pyperclip.paste()
@@ -81,6 +81,19 @@ class WindowsClipboardClient:
                 self.is_receiving = False
             except Exception as e:
                 print(f"❌ 接收错误: {e}")
+
+# 添加 start_discovery 方法到 DeviceDiscovery 类中
+class DeviceDiscovery:
+    # ... 现有代码 ...
+    
+    def start_discovery(self, callback):
+        """Discover clipboard services on the network."""
+        self.browser = ServiceBrowser(
+            self.zeroconf, 
+            self.service_name,
+            ClipboardServiceListener(callback)
+        )
+        print("🔍 开始搜索剪贴板服务...")
 
 def main():
     client = WindowsClipboardClient()
