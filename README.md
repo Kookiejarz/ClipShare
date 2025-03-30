@@ -2,7 +2,6 @@
 
 ![ClipShare](https://img.shields.io/badge/ClipShare-1.0.0-blue)
 ![Python](https://img.shields.io/badge/Python-3.7+-green)
-![License](https://img.shields.io/badge/License-MIT-orange)
 
 ClipShare 是一个端到端加密的跨平台剪贴板同步工具，支持 Mac 和 Windows 设备之间安全地共享剪贴板内容。
 
@@ -68,7 +67,7 @@ ClipShare/
 
 ### 本地开发环境
 ```sh
-git clone https://github.com/your-repo/ClipShare.git
+git clone https://github.com/Kookiejarz/ClipShare.git 
 cd ClipShare
 pip install -r requirements.txt
 ```
@@ -95,8 +94,6 @@ pip install -r requirements.txt
 - 某些应用程序可能会锁定剪贴板，尝试关闭这些应用。
 - Windows 权限问题可能阻止写入剪贴板，尝试以 **管理员权限** 运行。
 
-## 许可证
-MIT © 2025 ClipShare Developers
 
 ## 致谢
 - **Zeroconf** 提供的网络服务发现
@@ -104,5 +101,4 @@ MIT © 2025 ClipShare Developers
 - **cryptography** 提供的密码学工具
 - **pyperclip** 提供的剪贴板操作
 
-> ⚠️ **注意**：此项目为原型演示，不建议用于安全敏感的应用场景。在生产环境使用前，应加强身份验证和密钥管理功能。
-
+> ⚠️ **注意**：此项目为原型演示，不建议用于安全敏感的应用场景。
