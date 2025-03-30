@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 ### 在 Mac 上启动服务端
 ```sh
-python server.py
+python mac_clip_check.py 
 ```
 
 ### 在 Windows 上启动客户端
@@ -48,26 +48,9 @@ ClipShare 使用多层加密技术确保数据安全：
 - **AES-256-GCM**：高级加密标准和认证加密模式
 - **临时测试密钥**：当前版本使用临时预共享密钥用于测试
 
-## 项目结构
-```
-ClipShare/
-├── server.py        # 服务器端程序 (Mac)
-├── windows_client.py # 客户端程序 (Windows)
-├── requirements.txt # 依赖列表
-├── README.md        # 说明文档
-└── utils/           # 工具模块
-```
-
-## 开发指南
-
-### 添加新功能
-- **支持更多平台**：为 Linux 或移动平台添加支持
-- **图像共享**：添加对图像剪贴板内容的支持
-- **更好的授权机制**：添加设备认证和记住授权设备功能
-
 ### 本地开发环境
 ```sh
-git clone https://github.com/your-repo/ClipShare.git
+git clone https://github.com/Kookiejarz/ClipShare.git
 cd ClipShare
 pip install -r requirements.txt
 ```
@@ -94,8 +77,7 @@ pip install -r requirements.txt
 - 某些应用程序可能会锁定剪贴板，尝试关闭这些应用。
 - Windows 权限问题可能阻止写入剪贴板，尝试以 **管理员权限** 运行。
 
-## 许可证
-MIT © 2025 Yunheng Liu
+
 
 ## 致谢
 - **Zeroconf** 提供的网络服务发现
@@ -103,5 +85,5 @@ MIT © 2025 Yunheng Liu
 - **cryptography** 提供的密码学工具
 - **pyperclip** 提供的剪贴板操作
 
-> ⚠️ **注意**：此项目为原型演示，不建议用于安全敏感的应用场景。在生产环境使用前，应加强身份验证和密钥管理功能。
+> ⚠️ **注意**：此项目为原型演示，不建议用于安全敏感的应用场景。
 
