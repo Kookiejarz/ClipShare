@@ -5,6 +5,8 @@ import json
 import os
 import hmac
 import hashlib
+import platform
+import sys
 from pathlib import Path
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
@@ -19,6 +21,7 @@ class WindowsClipboardClient:
         self.is_receiving = False  # Flag to avoid clipboard loops
         self.device_id = self._get_device_id()
         self.device_token = self._load_device_token()
+        self.running = True  # 控制运行状态的标志
         
     def _get_device_id(self):
         """获取唯一设备ID"""
@@ -75,6 +78,15 @@ class WindowsClipboardClient:
             print("✅ 加密系统初始化成功")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
+            
+    def stop(self):
+        """停止客户端运行"""
+        print("\n⏹️ 正在停止客户端...")
+        self.running = False
+        # 关闭发现服务
+        if hasattr(self, 'discovery'):
+            self.discovery.close()
+        print("👋 感谢使用 ClipShare!")
 
     def on_service_found(self, ws_url):
         print(f"发现剪贴板服务: {ws_url}")
@@ -84,8 +96,11 @@ class WindowsClipboardClient:
         print("🔍 搜索剪贴板服务...")
         self.discovery.start_discovery(self.on_service_found)
         
-        while not self.ws_url:
+        while not self.ws_url and self.running:
             await asyncio.sleep(1)
+            
+        if not self.running:
+            return
             
         print(f"🔌 连接到服务器: {self.ws_url}")
         
@@ -141,21 +156,50 @@ class WindowsClipboardClient:
                     print("❌ 密钥交换失败，断开连接")
                     return
                 
-                # Start tasks for both sending and receiving
+                # 创建可取消的任务
                 send_task = asyncio.create_task(self.send_clipboard_changes(websocket))
                 receive_task = asyncio.create_task(self.receive_clipboard_changes(websocket))
                 
-                # Wait for either task to complete (or be cancelled)
-                await asyncio.gather(send_task, receive_task)
+                # 等待任务完成或者程序关闭
+                try:
+                    while self.running:
+                        # 使用短超时来定期检查running标志
+                        await asyncio.sleep(0.5)
+                        if not send_task.done() and not receive_task.done():
+                            continue
+                        break
+                    
+                    # 取消任务
+                    if not send_task.done():
+                        send_task.cancel()
+                    if not receive_task.done():
+                        receive_task.cancel()
+                        
+                    # 等待取消完成
+                    await asyncio.gather(send_task, receive_task, return_exceptions=True)
+                
+                except asyncio.CancelledError:
+                    print("🛑 任务已取消")
+                    # 取消子任务
+                    if not send_task.done():
+                        send_task.cancel()
+                    if not receive_task.done():
+                        receive_task.cancel()
+                    raise
+                    
+        except websockets.exceptions.ConnectionClosed:
+            print("📴 与服务器的连接已关闭")
         except Exception as e:
-            print(f"❌ 连接错误: {e}")
-            await asyncio.sleep(3)  # 等待一段时间后重试
-            # 重新尝试连接
-            await self.sync_clipboard()
+            if self.running:  # 只有在正常运行时才显示错误和重试
+                print(f"❌ 连接错误: {e}")
+                await asyncio.sleep(3)  # 等待一段时间后重试
+                # 重新尝试连接
+                if self.running:
+                    await self.sync_clipboard()
     
     async def send_clipboard_changes(self, websocket):
         """Monitor and send clipboard changes to Mac"""
-        while True:
+        while self.running:
             try:
                 current_content = pyperclip.paste()
                 if current_content != self.last_clipboard_content and not self.is_receiving:
@@ -169,13 +213,17 @@ class WindowsClipboardClient:
                     await websocket.send(encrypted_data)
                     self.last_clipboard_content = current_content
                 await asyncio.sleep(0.3)
+            except asyncio.CancelledError:
+                # 正常取消，不打印错误
+                break
             except Exception as e:
-                print(f"❌ 发送错误: {e}")
+                if self.running:  # 只在正常运行时打印错误
+                    print(f"❌ 发送错误: {e}")
                 await asyncio.sleep(1)  # Wait before retrying
     
     async def receive_clipboard_changes(self, websocket):
         """Receive clipboard changes from Mac"""
-        while True:
+        while self.running:
             try:
                 # 接收数据 - 可能是二进制或文本
                 received_data = await websocket.recv()
@@ -221,8 +269,12 @@ class WindowsClipboardClient:
                 # 延迟后重置标志
                 await asyncio.sleep(0.5)
                 self.is_receiving = False
+            except asyncio.CancelledError:
+                # 正常取消，不打印错误
+                break
             except Exception as e:
-                print(f"❌ 接收错误: {e}")
+                if self.running:  # 只在正常运行时打印错误
+                    print(f"❌ 接收错误: {e}")
                 await asyncio.sleep(1)  # 出错后等待一段时间再继续
 
     async def perform_key_exchange(self, websocket):
@@ -273,7 +325,21 @@ class WindowsClipboardClient:
 
 def main():
     client = WindowsClipboardClient()
-    asyncio.run(client.sync_clipboard())
+    
+    try:
+        print("🚀 ClipShare Windows 客户端已启动")
+        print("📋 按 Ctrl+C 退出程序")
+        
+        # 简单使用asyncio.run，依赖KeyboardInterrupt异常处理
+        asyncio.run(client.sync_clipboard())
+        
+    except KeyboardInterrupt:
+        print("\n👋 正在关闭 ClipShare...")
+    except Exception as e:
+        print(f"\n❌ 发生错误: {e}")
+    finally:
+        # 确保资源被清理
+        client.stop()
 
 if __name__ == "__main__":
     main()

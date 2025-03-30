@@ -2,6 +2,7 @@ import AppKit
 import asyncio
 import websockets
 import json 
+import signal
 from utils.security.crypto import SecurityManager
 from utils.security.auth import DeviceAuthManager
 from utils.network.discovery import DeviceDiscovery
@@ -16,6 +17,8 @@ class ClipboardListener:
         self.discovery = DeviceDiscovery()
         self._init_encryption()
         self.is_receiving = False  # Flag to avoid clipboard loops
+        self.running = True  # 控制运行状态的标志
+        self.server = None  # 保存WebSocket服务器引用，用于关闭
 
     def _init_encryption(self):
         """初始化加密系统"""
@@ -25,6 +28,21 @@ class ClipboardListener:
             print("✅ 加密系统初始化成功")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
+    
+    def stop(self):
+        """停止服务器运行"""
+        print("\n⏹️ 正在停止服务器...")
+        self.running = False
+        
+        # 关闭服务发现
+        if hasattr(self, 'discovery'):
+            self.discovery.close()
+        
+        # 关闭WebSocket服务器
+        if self.server:
+            self.server.close()
+        
+        print("👋 感谢使用 ClipShare 服务器!")
 
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
@@ -99,9 +117,20 @@ class ClipboardListener:
             print(f"✅ 设备 {device_id} 已连接并完成密钥交换")
             
             # 之后接收的都是二进制加密数据
-            while True:
-                encrypted_data = await websocket.recv()
-                await self.process_received_data(encrypted_data)
+            while self.running:
+                try:
+                    encrypted_data = await asyncio.wait_for(
+                        websocket.recv(), 
+                        timeout=1.0  # 设置较短的超时，以便可以定期检查running标志
+                    )
+                    await self.process_received_data(encrypted_data)
+                except asyncio.TimeoutError:
+                    # 超时只是用来检查running标志，不是错误
+                    continue
+                except asyncio.CancelledError:
+                    print(f"⏹️ {device_id} 的连接处理已取消")
+                    break
+                
         except websockets.exceptions.ConnectionClosed:
             print(f"📴 设备 {device_id or '未知设备'} 断开连接")
         finally:
@@ -109,7 +138,7 @@ class ClipboardListener:
                 self.connected_clients.remove(websocket)
 
     async def process_received_data(self, encrypted_data):
-        """处理从 Windows 接收到的加密数据"""
+        """处理从客户端接收到的加密数据"""
         try:
             self.is_receiving = True
             decrypted_data = self.security_mgr.decrypt_message(encrypted_data)
@@ -125,13 +154,14 @@ class ClipboardListener:
             pasteboard.clearContents()
             pasteboard.setString_forType_(content, AppKit.NSPasteboardTypeString)
             self.last_change_count = pasteboard.changeCount()
-            print("📋 已从 Windows 更新剪贴板")
+            print("📋 已从客户端更新剪贴板")
             
             # Reset flag after a short delay
             await asyncio.sleep(0.5)
             self.is_receiving = False
         except Exception as e:
             print(f"❌ 接收数据处理错误: {e}")
+            self.is_receiving = False
 
     async def broadcast_encrypted_data(self, encrypted_data):
         """广播加密数据到所有连接的客户端"""
@@ -140,37 +170,66 @@ class ClipboardListener:
         
         print(f"📢 广播数据 ({len(encrypted_data)} 字节) 到 {len(self.connected_clients)} 个客户端")
         
-        for client in self.connected_clients:
+        # 复制客户端集合以避免在迭代过程中修改
+        clients = self.connected_clients.copy()
+        
+        for client in clients:
             try:
                 # 确保以二进制格式发送
                 await client.send(encrypted_data)
             except Exception as e:
                 print(f"❌ 发送到客户端失败: {e}")
+                # 如果发送失败，尝试从集合中移除客户端
+                if client in self.connected_clients:
+                    self.connected_clients.remove(client)
 
     async def start_server(self, port=8765):
         """启动 WebSocket 服务器"""
-        # 指定 websockets 使用二进制模式
-        server = await websockets.serve(
-            self.handle_client, 
-            "0.0.0.0", 
-            port,
-            # 设置为二进制模式
-            subprotocols=["binary"]
-        )
-        await self.discovery.start_advertising(port)
-        print(f"🌐 WebSocket 服务器启动在端口 {port}")
-        await server.wait_closed()
+        try:
+            # 指定 websockets 使用二进制模式
+            self.server = await websockets.serve(
+                self.handle_client, 
+                "0.0.0.0", 
+                port,
+                # 设置为二进制模式
+                subprotocols=["binary"]
+            )
+            await self.discovery.start_advertising(port)
+            print(f"🌐 WebSocket 服务器启动在端口 {port}")
+            
+            # 等待服务器关闭
+            while self.running:
+                await asyncio.sleep(0.5)
+                
+            # 主动关闭服务器
+            if self.server:
+                self.server.close()
+                await self.server.wait_closed()
+                print("✅ WebSocket 服务器已关闭")
+                
+        except Exception as e:
+            print(f"❌ 服务器错误: {e}")
+        finally:
+            # 停止服务发现
+            self.discovery.close()
 
     async def check_clipboard(self):
         """轮询检查剪贴板内容变化"""
         print("🔐 加密剪贴板监听已启动...")
-        while True:
-            if not self.is_receiving:  # Only check if not currently receiving
-                new_change_count = self.pasteboard.changeCount()
-                if new_change_count != self.last_change_count:
-                    self.last_change_count = new_change_count
-                    await self.process_clipboard()
-            await asyncio.sleep(.3)
+        while self.running:
+            try:
+                if not self.is_receiving:  # Only check if not currently receiving
+                    new_change_count = self.pasteboard.changeCount()
+                    if new_change_count != self.last_change_count:
+                        self.last_change_count = new_change_count
+                        await self.process_clipboard()
+                await asyncio.sleep(.3)
+            except asyncio.CancelledError:
+                print("⏹️ 剪贴板监听已停止")
+                break
+            except Exception as e:
+                print(f"❌ 剪贴板监听错误: {e}")
+                await asyncio.sleep(1)
 
     async def process_clipboard(self):
         """处理并加密剪贴板内容"""
@@ -247,15 +306,34 @@ class ClipboardListener:
 
 async def main():
     listener = ClipboardListener()
+    
+    # 设置信号处理
+    def signal_handler():
+        print("\n⚠️ 接收到关闭信号...")
+        listener.stop()
+    
+    # 捕获Ctrl+C信号
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, signal_handler)
+    
     try:
-        await asyncio.gather(
-            listener.start_server(),
-            listener.check_clipboard()
-        )
-    except KeyboardInterrupt:
-        print("\n👋 正在关闭服务...")
+        print("🚀 ClipShare Mac 服务器已启动")
+        print("📋 按 Ctrl+C 退出程序")
+        
+        # 创建任务
+        server_task = asyncio.create_task(listener.start_server())
+        clipboard_task = asyncio.create_task(listener.check_clipboard())
+        
+        # 等待任务完成或被取消
+        await asyncio.gather(server_task, clipboard_task)
+    except asyncio.CancelledError:
+        print("\n⏹️ 任务已取消")
+    except Exception as e:
+        print(f"\n❌ 发生错误: {e}")
     finally:
-        listener.discovery.close()
+        # 确保资源被清理
+        listener.stop()
 
 if __name__ == '__main__':
     asyncio.run(main())
