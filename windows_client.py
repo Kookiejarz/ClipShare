@@ -3,8 +3,8 @@ import websockets
 import pyperclip
 import json
 import time
-from clipshare.security.crypto import SecurityManager
-from clipshare.network.discovery import DeviceDiscovery
+from utils.security.crypto import SecurityManager
+from utils.network.discovery import DeviceDiscovery
 
 class WindowsClipboardClient:
     def __init__(self):

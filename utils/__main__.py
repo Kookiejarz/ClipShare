@@ -1,7 +1,7 @@
 import threading
-from clipshare.core.clipboard_manager import ClipboardManager
-from clipshare.network.discovery import DeviceDiscovery
-from clipshare.security.crypto import SecurityManager
+from utils.core.clipboard_manager import ClipboardManager
+from utils.network.discovery import DeviceDiscovery
+from utils.security.crypto import SecurityManager
 
 def main():
     # Initialize components

@@ -3,8 +3,8 @@ import time
 import asyncio
 import websockets
 import json  # 添加这一行
-from clipshare.security.crypto import SecurityManager
-from clipshare.network.discovery import DeviceDiscovery
+from utils.security.crypto import SecurityManager
+from utils.network.discovery import DeviceDiscovery
 
 class ClipboardListener:
     def __init__(self):
