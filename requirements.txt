@@ -2,7 +2,7 @@ pyperclip>=1.8.2
 cryptography>=3.4.7
 zeroconf>=0.38.6
 netifaces>=0.11.0
-websocket-client>=1.4.0
-websockets>=10.0.0
-Pillow>=9.0.0
-pywin32>=300; platform_system=="Windows"
+websockets>=11.0.3
+pywin32>=306; sys_platform == 'win32'
+pyobjc-framework-Cocoa>=9.0.1; sys_platform == 'darwin'
+pyobjc-core>=9.0.1; sys_platform == 'darwin'
