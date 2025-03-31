@@ -1,7 +1,6 @@
 # UniPaste: 安全跨平台剪贴板同步工具
 
-![UniPaste](https://img.shields.io/badge/UniPaste
--1.0.0-blue)
+![UniPaste](https://img.shields.io/badge/UniPaste-1.0.0-blue)
 ![Python](https://img.shields.io/badge/Python-3.7+-green)
 
 UniPaste是一个端到端加密的跨平台剪贴板同步工具，支持 Mac 和 Windows 设备之间安全地共享剪贴板内容。
@@ -52,7 +51,7 @@ ClipShare 使用多层加密技术确保数据安全：
 ### 本地开发环境
 ```sh
 git clone https://github.com/Kookiejarz/UniPaste.git
-cd ClipShare
+cd UniPaste
 pip install -r requirements.txt
 ```
 
