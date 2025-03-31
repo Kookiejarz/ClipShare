@@ -1,4 +1,4 @@
-name: Build UniPaste Applications
+name: Build UniPaste Application
 
 on:
   push:
@@ -10,40 +10,6 @@ on:
   workflow_dispatch:  # Allows manual triggering
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-          
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-          
-      - name: Build Windows executable
-        run: |
-          pyinstaller --onefile --icon=assets/clipshare.ico --name ClipShare-Windows --add-data "LICENSE;." windows_client.py
-          
-      - name: Package Windows application
-        run: |
-          mkdir -p release/windows
-          copy dist\ClipShare-Windows.exe release\windows\
-          copy README.md release\windows\
-          copy LICENSE release\windows\
-          
-      - name: Upload Windows build
-        uses: actions/upload-artifact@v4
-        with:
-          name: clipshare-windows
-          path: release/windows/
-
   build-macos:
     runs-on: macos-latest
     steps:
@@ -61,52 +27,86 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
           
+      - name: Create icon directory if needed
+        run: mkdir -p assets
+          
       - name: Build macOS application
         run: |
-          pyinstaller --onefile --icon=assets/clipshare.icns --name ClipShare-Mac --add-data "LICENSE:." mac_clip_check.py
+          # Create a spec file to ensure utils module is included
+          echo "# -*- mode: python -*-
+          block_cipher = None
+
+          a = Analysis(['mac_clip_check.py'],
+                      pathex=[],
+                      binaries=[],
+                      datas=[('LICENSE', '.'), ('utils', 'utils')],
+                      hiddenimports=['AppKit', 'websockets', 'cryptography', 'utils.security.crypto', 'utils.network.discovery'],
+                      hookspath=[],
+                      hooksconfig={},
+                      runtime_hooks=[],
+                      excludes=[],
+                      win_no_prefer_redirects=False,
+                      win_private_assemblies=False,
+                      cipher=block_cipher,
+                      noarchive=False)
+          pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+          exe = EXE(pyz,
+                  a.scripts,
+                  a.binaries,
+                  a.zipfiles,
+                  a.datas,
+                  [],
+                  name='UniPaste-Mac',
+                  debug=False,
+                  bootloader_ignore_signals=False,
+                  strip=False,
+                  upx=True,
+                  upx_exclude=[],
+                  runtime_tmpdir=None,
+                  console=True,
+                  disable_windowed_traceback=False,
+                  argv_emulation=True,
+                  target_arch=None,
+                  codesign_identity=None,
+                  entitlements_file=None)" > unipaste.spec
+          
+          # Build using the spec file
+          pyinstaller unipaste.spec
           
       - name: Package macOS application
         run: |
           mkdir -p release/macos
-          cp dist/ClipShare-Mac release/macos/
-          cp README.md release/macos/
-          cp LICENSE release/macos/
-          chmod +x release/macos/ClipShare-Mac
+          cp dist/UniPaste-Mac release/macos/
+          cp README.md release/macos/ || echo "README.md not found"
+          cp LICENSE release/macos/ || echo "LICENSE not found"
+          chmod +x release/macos/UniPaste-Mac
           
       - name: Upload macOS build
         uses: actions/upload-artifact@v4
         with:
-          name: clipshare-macos
+          name: UniPaste-macos
           path: release/macos/
 
   create-release:
-    needs: [build-windows, build-macos]
+    needs: [build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: clipshare-windows
-          path: release/windows
-          
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: clipshare-macos
+          name: UniPaste-macos
           path: release/macos
           
-      - name: Create ZIP archives
+      - name: Create ZIP archive
         run: |
           cd release
-          zip -r clipshare-windows.zip windows
-          zip -r clipshare-macos.zip macos
+          zip -r UniPaste-macos.zip macos
           
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            release/clipshare-windows.zip
-            release/clipshare-macos.zip
+            release/UniPaste-macos.zip
           draft: false
           prerelease: false
