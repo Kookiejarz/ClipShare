@@ -1,4 +1,4 @@
-name: Build ClipShare Applications
+name: Build UniPaste Applications
 
 on:
   push:
