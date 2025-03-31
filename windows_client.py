@@ -102,7 +102,7 @@ class WindowsClipboardClient:
         # 关闭发现服务
         if hasattr(self, 'discovery'):
             self.discovery.close()
-        print("👋 感谢使用 ClipShare!")
+        print("👋 感谢使用 UniPaste!")
 
     def on_service_found(self, ws_url):
         """服务发现回调"""

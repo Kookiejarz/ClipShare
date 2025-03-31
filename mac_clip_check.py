@@ -28,7 +28,7 @@ class ClipboardListener:
         self.last_update_time = 0  # 记录最后一次更新剪贴板的时间
         self.running = True  # 控制运行状态的标志
         self.server = None  # 保存WebSocket服务器引用，用于关闭
-        self.temp_dir = Path(tempfile.gettempdir()) / "clipshare_files"
+        self.temp_dir = Path(tempfile.gettempdir()) / "unipaste_files"
         self.temp_dir.mkdir(exist_ok=True)
         self.file_transfers = {}  # 跟踪文件传输状态
         self.file_cache = {}  # 文件哈希缓存，格式: {hash: 路径}
@@ -56,7 +56,7 @@ class ClipboardListener:
         if self.server:
             self.server.close()
         
-        print("👋 感谢使用 ClipShare 服务器!")
+        print("👋 感谢使用 UniPaste 服务器!")
 
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
