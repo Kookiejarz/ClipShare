@@ -301,6 +301,15 @@ class WindowsClipboardClient:
                     file_paths = win32clipboard.GetClipboardData(win32con.CF_HDROP)
                     if file_paths:
                         paths = list(file_paths)
+                        # 计算路径哈希用于状态跟踪
+                        paths_hash = hashlib.md5(str(paths).encode()).hexdigest()
+                        
+                        # 如果和上次的内容相同，不重复提示
+                        if hasattr(self, '_last_paths_hash') and self._last_paths_hash == paths_hash:
+                            return [str(path) for path in paths]
+                            
+                        # 更新状态并显示提示
+                        self._last_paths_hash = paths_hash
                         print(f"📎 剪贴板中包含 {len(paths)} 个文件")
                         return [str(path) for path in paths]
                 else:
@@ -320,10 +329,11 @@ class WindowsClipboardClient:
                     
                     # 只有当格式组合发生变化时才打印
                     if formats_hash not in self.last_format_log:
-                        print("🔍 剪贴板中没有文件格式数据")
-                        if available_formats:
-                            print(f"📋 当前剪贴板格式: {', '.join(available_formats[:5])}" + 
-                                  (f"... 等{len(available_formats)-5}种" if len(available_formats) > 5 else ""))
+                        if len(self.last_format_log) > 0:  # 只有在非首次检查时才显示
+                            print("🔍 剪贴板中没有文件格式数据")
+                            if available_formats:
+                                print(f"📋 当前剪贴板格式: {', '.join(available_formats[:5])}" + 
+                                      (f"... 等{len(available_formats)-5}种" if len(available_formats) > 5 else ""))
                         # 更新已记录的格式
                         self.last_format_log.add(formats_hash)
                         # 保持集合大小在合理范围内
@@ -332,6 +342,7 @@ class WindowsClipboardClient:
                     
             finally:
                 win32clipboard.CloseClipboard()
+                
         except Exception as e:
             print(f"❌ 读取剪贴板文件失败: {e}")
             # 打印详细错误信息以帮助调试
