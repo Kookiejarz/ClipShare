@@ -304,8 +304,8 @@ class FileHandler:
                 self.file_transfers[filename]["received_chunks"] += 1
                 
             # 检查是否完成
-            if self.file_transfers[filename]["received_chunks"] == total_chunks:
-                print(f"✅ 文件 {filename} 传输完成")
+            transfer = self.file_transfers[filename]
+            if transfer["received_chunks"] == total_chunks:
                 return True
                 
             return False

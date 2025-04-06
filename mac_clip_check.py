@@ -236,7 +236,7 @@ class ClipboardListener:
         """广播加密数据到所有连接的客户端，可选择排除特定客户端"""
         if not self.connected_clients:
             return
-        
+ 
         # 计算要广播的客户端数
         broadcast_count = len(self.connected_clients) - (1 if exclude_client in self.connected_clients else 0)
         if broadcast_count == 0:
