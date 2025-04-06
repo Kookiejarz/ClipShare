@@ -23,6 +23,8 @@ class FileHandler:
         self.file_cache = {}
         self._init_temp_dir()
         self.load_file_cache()
+        self.chunk_size = 512 * 1024  # 512KB chunks for file transfer
+        self.pending_transfers = {}  # Track ongoing chunked transfers
 
     def _init_temp_dir(self):
         """初始化临时目录"""
@@ -62,7 +64,7 @@ class FileHandler:
             if file_size <= 10 * 1024 * 1024:  # 10MB
                 await self._transfer_small_file(path_obj, file_size, broadcast_fn)
             else:
-                print(f"ℹ️ 文件过大 ({file_size/1024/1024:.1f} MB)，等待请求: {path_obj.name}")
+                await self.send_large_file(file_path, broadcast_fn)
             return True
         except Exception as e:
             print(f"❌ 文件传输错误: {e}")
@@ -96,6 +98,139 @@ class FileHandler:
                 await broadcast_fn(encrypted_resp)
                 print(f"📤 已发送文件块: {path_obj.name} ({i+1}/{total_chunks})")
                 await asyncio.sleep(0.05)  # 避免网络拥塞
+
+    async def send_large_file(self, file_path: str, broadcast_fn):
+        """分块发送大文件"""
+        path_obj = Path(file_path)
+        if not path_obj.exists():
+            print(f"❌ 文件不存在: {file_path}")
+            return False
+
+        file_size = path_obj.stat().st_size
+        total_chunks = (file_size + self.chunk_size - 1) // self.chunk_size
+        file_id = hashlib.md5(f"{path_obj.name}-{time.time()}".encode()).hexdigest()
+
+        # Send file start message
+        start_message = ClipMessage.create({
+            "type": MessageType.FILE_START,
+            "file_id": file_id,
+            "filename": path_obj.name,
+            "total_chunks": total_chunks,
+            "total_size": file_size
+        })
+
+        try:
+            # Send start message
+            encrypted_start = self.security_mgr.encrypt_message(
+                ClipMessage.serialize(start_message).encode('utf-8')
+            )
+            await broadcast_fn(encrypted_start)
+            print(f"\n📤 开始发送文件: {path_obj.name} ({file_size/1024/1024:.1f}MB)")
+
+            # Send chunks
+            with open(file_path, 'rb') as f:
+                for i in range(total_chunks):
+                    chunk = f.read(self.chunk_size)
+                    await self._send_file_chunk(
+                        chunk, i, file_id, path_obj.name, 
+                        total_chunks, broadcast_fn
+                    )
+                    
+                    # Show progress
+                    progress = self._format_progress(i + 1, total_chunks)
+                    print(f"\r📤 发送文件 {path_obj.name}: {progress}", end="")
+
+            print(f"\n✅ 文件 {path_obj.name} 发送完成")
+            return True
+
+        except Exception as e:
+            print(f"\n❌ 发送文件失败: {e}")
+            return False
+
+    async def _send_file_chunk(self, chunk_data, chunk_number, file_id, filename, total_chunks, broadcast_fn):
+        """发送单个文件块"""
+        chunk_message = ClipMessage.create({
+            "type": MessageType.FILE_CHUNK,
+            "file_id": file_id,
+            "chunk_number": chunk_number,
+            "data": base64.b64encode(chunk_data).decode('utf-8'),
+            "is_last": chunk_number == total_chunks - 1,
+            "filename": filename
+        })
+
+        encrypted_chunk = self.security_mgr.encrypt_message(
+            ClipMessage.serialize(chunk_message).encode('utf-8')
+        )
+        await broadcast_fn(encrypted_chunk)
+        await asyncio.sleep(0.05)  # Prevent network congestion
+
+    async def receive_file_chunk(self, message: dict) -> bool:
+        """处理接收到的文件块"""
+        file_id = message.get("file_id")
+        if file_id not in self.pending_transfers:
+            self.pending_transfers[file_id] = {
+                "chunks": {},
+                "total_chunks": message.get("total_chunks", 0),
+                "filename": message.get("filename", "unknown"),
+                "received_chunks": 0
+            }
+
+        transfer = self.pending_transfers[file_id]
+        chunk_number = message.get("chunk_number")
+        chunk_data = base64.b64decode(message.get("data"))
+        
+        # Store chunk
+        transfer["chunks"][chunk_number] = chunk_data
+        transfer["received_chunks"] += 1
+
+        # Show progress
+        progress = self._format_progress(
+            transfer["received_chunks"],
+            transfer["total_chunks"]
+        )
+        print(f"\r📥 接收文件 {transfer['filename']}: {progress}", end="")
+
+        # Check if file is complete
+        if transfer["received_chunks"] == transfer["total_chunks"]:
+            await self._complete_file_transfer(file_id)
+            return True
+            
+        return False
+
+    async def _complete_file_transfer(self, file_id: str):
+        """完成文件传输"""
+        transfer = self.pending_transfers[file_id]
+        
+        # Combine all chunks
+        complete_data = b"".join(
+            transfer["chunks"][i] 
+            for i in range(transfer["total_chunks"])
+        )
+
+        # Save file
+        save_path = self.temp_dir / transfer["filename"]
+        try:
+            with open(save_path, 'wb') as f:
+                f.write(complete_data)
+            print(f"\n✅ 文件保存到: {save_path}")
+            
+            # Add to cache
+            file_hash = hashlib.md5(complete_data).hexdigest()
+            self.add_to_file_cache(file_hash, str(save_path))
+            
+        except Exception as e:
+            print(f"\n❌ 保存文件失败: {e}")
+            
+        # Cleanup
+        del self.pending_transfers[file_id]
+
+    def _format_progress(self, current: int, total: int) -> str:
+        """格式化进度显示"""
+        percentage = (current * 100) // total
+        bar_length = 20
+        filled = (percentage * bar_length) // 100
+        bar = '█' * filled + '░' * (bar_length - filled)
+        return f"[{bar}] {percentage}% ({current}/{total})"
 
     def handle_received_chunk(self, message: dict) -> bool:
         """处理接收到的文件块"""
