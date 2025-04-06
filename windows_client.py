@@ -7,11 +7,12 @@ import hmac
 import hashlib
 import sys
 import base64
-import time  # 添加 time 模块
+import time
 from pathlib import Path
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
 from utils.message_format import ClipMessage, MessageType
+from handlers.file_handler import FileHandler
 import win32clipboard
 import tempfile
 
