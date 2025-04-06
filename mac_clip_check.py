@@ -43,20 +43,6 @@ class ClipboardListener:
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
     
-    def stop(self):
-        """停止服务器运行"""
-        print("\n⏹️ 正在停止服务器...")
-        self.running = False
-        
-        # 关闭服务发现
-        if hasattr(self, 'discovery'):
-            self.discovery.close()
-        
-        # 关闭WebSocket服务器
-        if self.server:
-            self.server.close()
-        
-        print("👋 感谢使用 UniPaste 服务器!")
 
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
@@ -582,44 +568,18 @@ class ClipboardListener:
 
     async def perform_key_exchange(self, websocket):
         """Perform key exchange with client"""
-        try:
-            # Generate and send our public key
-            if not self.security_mgr.public_key:
-                self.security_mgr.generate_key_pair()
+        # Create wrapper functions for sending/receiving through websocket
+        async def send_to_websocket(data):
+            await websocket.send(data)
             
-            server_public_key = self.security_mgr.serialize_public_key()
-            key_message = json.dumps({
-                "type": "key_exchange",
-                "public_key": server_public_key
-            })
-            await websocket.send(key_message)
-            print("📤 已发送服务器公钥")
-            
-            # Receive client's public key
-            response = await websocket.recv()
-            client_data = json.loads(response)
-            
-            if client_data.get("type") == "key_exchange":
-                client_key_data = client_data.get("public_key")
-                client_public_key = self.security_mgr.deserialize_public_key(client_key_data)
-                
-                # Generate shared key
-                self.security_mgr.generate_shared_key(client_public_key)
-                print("🔒 密钥交换完成，已建立共享密钥")
-                
-                # Send confirmation
-                await websocket.send(json.dumps({
-                    "type": "key_exchange_complete",
-                    "status": "success"
-                }))
-                return True
-            else:
-                print("❌ 客户端未发送公钥")
-                return False
-                
-        except Exception as e:
-            print(f"❌ 密钥交换失败: {e}")
-            return False
+        async def receive_from_websocket():
+            return await websocket.recv()
+        
+        # Use the SecurityManager's key exchange implementation
+        return await self.security_mgr.perform_key_exchange(
+            send_to_websocket,
+            receive_from_websocket
+        )
 
     def load_file_cache(self):
         """加载文件缓存信息"""
@@ -671,6 +631,21 @@ class ClipboardListener:
                 return True
                 
         return False
+    
+    def stop(self):
+        """停止服务器运行"""
+        print("\n⏹️ 正在停止服务器...")
+        self.running = False
+        
+        # 关闭服务发现
+        if hasattr(self, 'discovery'):
+            self.discovery.close()
+        
+        # 关闭WebSocket服务器
+        if self.server:
+            self.server.close()
+        
+        print("👋 感谢使用 UniPaste 服务器!")
 
 async def main():
     listener = ClipboardListener()
