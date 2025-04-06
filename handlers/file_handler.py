@@ -246,56 +246,44 @@ class FileHandler:
 
     def handle_received_chunk(self, message: dict) -> bool:
         """处理接收到的文件块"""
-        filename = message.get("filename", "unknown")
-        chunk_index = message.get("chunk_index", 0)
-        total_chunks = message.get("total_chunks", 1)
-        chunk_data = base64.b64decode(message["chunk_data"])
-        chunk_hash = message.get("chunk_hash", "")
-        
-        # 验证块哈希
-        if chunk_hash:
-            calculated_hash = hashlib.md5(chunk_data).hexdigest()
-            if calculated_hash != chunk_hash:
-                print(f"⚠️ 文件块 {filename} ({chunk_index+1}/{total_chunks}) 哈希验证失败")
-                return False
-
-        save_path = self.temp_dir / filename
-        mode = "wb" if chunk_index == 0 else "ab"
-        
         try:
+            filename = message.get("filename", "unknown")
+            chunk_index = message.get("chunk_index", 0)
+            total_chunks = message.get("total_chunks", 1)
+            chunk_data = base64.b64decode(message.get("chunk_data", ""))
+            
+            if not chunk_data:
+                print(f"⚠️ 文件 {filename} 的数据块为空")
+                return False
+                
+            save_path = self.temp_dir / filename
+            mode = "wb" if chunk_index == 0 else "ab"
+            
             with open(save_path, mode) as f:
                 f.write(chunk_data)
+                
+            # 更新传输状态
+            if filename not in self.file_transfers:
+                self.file_transfers[filename] = {
+                    "received_chunks": 1,
+                    "total_chunks": total_chunks,
+                    "path": save_path
+                }
+            else:
+                self.file_transfers[filename]["received_chunks"] += 1
+                
+            # 检查是否完成
+            if self.file_transfers[filename]["received_chunks"] == total_chunks:
+                print(f"✅ 文件 {filename} 传输完成")
+                return True
+                
+            return False
             
-            self._update_transfer_status(filename, chunk_index, total_chunks, save_path)
-            return self._check_transfer_complete(filename)
         except Exception as e:
-            print(f"❌ 保存文件块失败: {e}")
+            print(f"❌ 处理文件块失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
-
-    def _update_transfer_status(self, filename: str, chunk_index: int, total_chunks: int, save_path: Path):
-        """更新文件传输状态"""
-        if filename not in self.file_transfers:
-            self.file_transfers[filename] = {
-                "received_chunks": 1,
-                "total_chunks": total_chunks,
-                "path": save_path
-            }
-        else:
-            self.file_transfers[filename]["received_chunks"] += 1
-        
-        received = self.file_transfers[filename]["received_chunks"]
-        print(f"📥 接收文件块: {filename} ({chunk_index+1}/{total_chunks}, 进度: {received}/{total_chunks})")
-
-    def _check_transfer_complete(self, filename: str) -> bool:
-        """检查文件是否传输完成"""
-        if filename not in self.file_transfers:
-            return False
-            
-        transfer = self.file_transfers[filename]
-        if transfer["received_chunks"] == transfer["total_chunks"]:
-            print(f"✅ 文件接收完成: {transfer['path']}")
-            return True
-        return False
 
     # 文件缓存相关方法
     def load_file_cache(self):

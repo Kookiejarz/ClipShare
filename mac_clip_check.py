@@ -5,7 +5,7 @@ import json
 import signal
 import time
 import base64
-import os  # 添加 os 模块导入
+import os
 from utils.security.crypto import SecurityManager
 from utils.security.auth import DeviceAuthManager
 from utils.network.discovery import DeviceDiscovery
@@ -182,77 +182,36 @@ class ClipboardListener:
             self.is_receiving = True
             decrypted_data = self.security_mgr.decrypt_message(encrypted_data)
             message_json = decrypted_data.decode('utf-8')
-            
-            # 解析消息
             message = ClipMessage.deserialize(message_json)
-            if not message or "type" not in message:
-                print("❌ 收到无效的消息格式")
-                self.is_receiving = False
-                return
             
-            # 根据消息类型处理
-            if message["type"] == MessageType.TEXT:
-                content = message["content"]
-                
-                # 计算内容哈希，用于防止循环
-                content_hash = hashlib.md5(content.encode()).hexdigest()
-                
-                # 如果和上次接收/发送的内容相同，则跳过
-                if content_hash == self.last_content_hash:
-                    print(f"⏭️ 跳过重复内容: 哈希值 {content_hash[:8]}... 相同")
-                    self.is_receiving = False
-                    return
-                
-                self.last_content_hash = content_hash
-                
-                # 显示收到的内容（限制字符数以防内容过长）
-                max_display_len = 100
-                display_content = content if len(content) <= max_display_len else content[:max_display_len] + "..."
-                print(f"📥 收到文本: \"{display_content}\"")
-                
-                # Set to Mac clipboard
-                pasteboard = AppKit.NSPasteboard.generalPasteboard()
-                pasteboard.clearContents()
-                pasteboard.setString_forType_(content, AppKit.NSPasteboardTypeString)
-                self.last_change_count = pasteboard.changeCount()
-                self.last_update_time = time.time()
-                print("📋 已从客户端更新剪贴板")
-            
-            elif message["type"] == MessageType.FILE:
-                # 使用文件处理器处理文件信息
-                self.last_content_hash = await self.file_handler.handle_received_files(
-                    message,
-                    sender_websocket,
-                    self.broadcast_encrypted_data
-                )
-                self.last_update_time = time.time()
-            
-            elif message["type"] == MessageType.FILE_RESPONSE:
-                # 收到文件内容响应
-                filename = message.get("filename", "未知文件")
+            if message["type"] == MessageType.FILE_RESPONSE:
+                filename = message.get("filename", "unknown")
                 exists = message.get("exists", False)
+                chunk_data = message.get("chunk_data")
                 
                 if not exists:
                     print(f"⚠️ 文件 {filename} 在源设备上不存在")
-                    self.is_receiving = False
                     return
-                
-                # 处理文件块和验证
-                success = self.file_handler.handle_received_chunk(message)
-                if success:
-                    new_count = self.file_handler.set_clipboard_file(
-                        self.file_handler.file_transfers[filename]["path"]
-                    )
-                    if new_count:
-                        self.last_change_count = new_count
-                        self.last_update_time = time.time()
-        
-            # 重置接收标志并添加延迟
-            self.is_receiving = False
-            await asyncio.sleep(1.5)
-        
+                    
+                if chunk_data:
+                    # 处理文件块
+                    success = self.file_handler.handle_received_chunk(message)
+                    if success:
+                        print(f"✅ 文件 {filename} 接收完成")
+                        
+                        # 添加到剪贴板
+                        file_path = self.file_handler.file_transfers[filename]["path"]
+                        new_count = self.file_handler.set_clipboard_file(file_path)
+                        if new_count:
+                            self.last_change_count = new_count
+                            self.last_update_time = time.time()
+                            print(f"📎 文件已添加到剪贴板: {filename}")
+                            
         except Exception as e:
-            print(f"❌ 接收数据处理错误: {e}")
+            print(f"❌ 文件处理错误: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
             self.is_receiving = False
 
     async def broadcast_encrypted_data(self, encrypted_data, exclude_client=None):

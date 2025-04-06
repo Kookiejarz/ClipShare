@@ -683,6 +683,68 @@ class WindowsClipboardClient:
         finally:
             self.is_receiving = False
 
+    async def handle_file_transfer(self, file_path: str, broadcast_fn):
+        """处理文件传输"""
+        path_obj = Path(file_path)
+        
+        # 检查文件是否存在并且可读
+        if not path_obj.exists():
+            print(f"⚠️ 文件不存在: {file_path}")
+            return False
+            
+        if not path_obj.is_file():
+            print(f"⚠️ 不是有效的文件: {file_path}")
+            return False
+            
+        try:
+            # 确保文件可读
+            with open(path_obj, 'rb') as f:
+                pass
+                
+            file_size = path_obj.stat().st_size
+            print(f"📤 正在处理文件: {path_obj.name} ({file_size} 字节)")
+            
+            # 创建文件响应消息
+            response = {
+                'type': MessageType.FILE_RESPONSE,
+                'filename': path_obj.name,
+                'exists': True,
+                'path': str(path_obj)
+            }
+            
+            # 加密并发送文件信息
+            encrypted_resp = self.security_mgr.encrypt_message(
+                json.dumps(response).encode('utf-8')
+            )
+            await broadcast_fn(encrypted_resp)
+            
+            # 发送文件内容
+            with open(path_obj, 'rb') as f:
+                chunk = f.read()
+                chunk_data = base64.b64encode(chunk).decode('utf-8')
+                
+                file_msg = {
+                    'type': MessageType.FILE_RESPONSE,
+                    'filename': path_obj.name,
+                    'exists': True,
+                    'chunk_data': chunk_data,
+                    'chunk_index': 0,
+                    'total_chunks': 1
+                }
+                
+                encrypted_data = self.security_mgr.encrypt_message(
+                    json.dumps(file_msg).encode('utf-8')
+                )
+                await broadcast_fn(encrypted_data)
+                
+            return True
+                
+        except Exception as e:
+            print(f"❌ 文件传输失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
 def main():
     client = WindowsClipboardClient()
     
