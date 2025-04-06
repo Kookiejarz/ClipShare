@@ -655,18 +655,20 @@ class WindowsClipboardClient:
                 # 将文件路径添加到Windows剪贴板
                 try:
                     import win32clipboard
-                    from win32com.shell import shell, shellcon
+                    import win32con
+                    from ctypes import sizeof, c_wchar_p, create_unicode_buffer
                     
-                    # 创建DROPFILES结构
-                    drop_effect = shell.DataObject()
-                    file_list = [str(file_path)]
-                    drop_effect.SetData(shellcon.CF_HDROP, 0, file_list)
+                    # 准备文件路径
+                    file_list = str(file_path) + '\0'  # 以null结尾
+                    buffer = create_unicode_buffer(file_list)
                     
-                    # 更新剪贴板
+                    # 打开剪贴板
                     win32clipboard.OpenClipboard()
                     try:
                         win32clipboard.EmptyClipboard()
-                        drop_effect.PutToClipboard()
+                        
+                        # 使用 CF_HDROP 格式设置文件路径
+                        win32clipboard.SetClipboardData(win32con.CF_HDROP, buffer)
                         print(f"📎 已将文件添加到剪贴板，可用于复制粘贴: {filename}")
                     finally:
                         win32clipboard.CloseClipboard()
@@ -680,16 +682,15 @@ class WindowsClipboardClient:
                     import traceback
                     traceback.print_exc()
                     
-                    # 尝试使用备用方法
+                    # 作为备用方案，尝试使用文本方式设置路径
                     try:
-                        from win32com.shell import shell, shellcon
-                        import pythoncom
-                        
-                        pythoncom.CoInitialize()
-                        drop_effect = shell.DataObject()
-                        drop_effect.SetData(shellcon.CF_HDROP, 0, [str(file_path)])
-                        drop_effect.PutToClipboard()
-                        print(f"📎 使用备用方法添加文件到剪贴板成功: {filename}")
+                        win32clipboard.OpenClipboard()
+                        try:
+                            win32clipboard.EmptyClipboard()
+                            win32clipboard.SetClipboardText(str(file_path))
+                            print(f"📎 使用文本方式添加文件路径到剪贴板: {filename}")
+                        finally:
+                            win32clipboard.CloseClipboard()
                     except Exception as backup_err:
                         print(f"❌ 备用方法也失败了: {backup_err}")
         

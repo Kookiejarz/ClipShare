@@ -184,31 +184,31 @@ class ClipboardListener:
             message_json = decrypted_data.decode('utf-8')
             message = ClipMessage.deserialize(message_json)
             
-            if message["type"] == MessageType.FILE_RESPONSE:
-                filename = message.get("filename", "unknown")
-                exists = message.get("exists", False)
-                chunk_data = message.get("chunk_data")
+            if message["type"] == MessageType.TEXT:
+                text = message.get("content", "")
+                if not text:
+                    print("⚠️ 收到空文本消息")
+                    return
                 
-                if not exists:
-                    print(f"⚠️ 文件 {filename} 在源设备上不存在")
+                # 检查是否是临时文件路径
+                if self._looks_like_temp_file_path(text):
                     return
                     
-                if chunk_data:
-                    # 处理文件块
-                    success = self.file_handler.handle_received_chunk(message)
-                    if success:
-                        print(f"✅ 文件 {filename} 接收完成")
-                        
-                        # 添加到剪贴板
-                        file_path = self.file_handler.file_transfers[filename]["path"]
-                        new_count = self.file_handler.set_clipboard_file(file_path)
-                        if new_count:
-                            self.last_change_count = new_count
-                            self.last_update_time = time.time()
-                            print(f"📎 文件已添加到剪贴板: {filename}")
-                            
+                # 更新剪贴板
+                self.pasteboard.clearContents()
+                self.pasteboard.setString_forType_(text, AppKit.NSPasteboardTypeString)
+                self.last_change_count = self.pasteboard.changeCount()
+                self.last_update_time = time.time()
+                
+                # 显示接收到的文本(限制长度)
+                max_display = 50
+                display_text = text[:max_display] + ("..." if len(text) > max_display else "")
+                print(f"📥 已复制文本: \"{display_text}\"")
+                
+            # ... 其他消息类型的处理 ...
+                
         except Exception as e:
-            print(f"❌ 文件处理错误: {e}")
+            print(f"❌ 接收数据处理错误: {e}")
             import traceback
             traceback.print_exc()
         finally:
