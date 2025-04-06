@@ -299,14 +299,14 @@ class FileHandler:
                 import msvcrt
                 with open(save_path, "ab") as f:
                     try:
-                        # 锁定文件
-                        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, chunk_size)
-                        f.seek(chunk_index * 512 * 1024)  # 定位到正确的位置
+                        # 锁定文件，使用self.chunk_size
+                        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, self.chunk_size)
+                        f.seek(chunk_index * self.chunk_size)  # 使用相同的chunk_size
                         f.write(chunk_data)
                     finally:
                         # 解锁文件
                         try:
-                            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, chunk_size)
+                            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, self.chunk_size)
                         except:
                             pass  # Ignore unlock errors
             else:
@@ -315,7 +315,7 @@ class FileHandler:
                 with open(save_path, "ab") as f:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                     try:
-                        f.seek(chunk_index * 512 * 1024)
+                        f.seek(chunk_index * self.chunk_size)  # 使用相同的chunk_size
                         f.write(chunk_data)
                     finally:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
@@ -346,6 +346,41 @@ class FileHandler:
             
         except Exception as e:
             print(f"❌ 处理文件块失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _verify_file_integrity(self, file_path: Path) -> bool:
+        """验证文件的完整性"""
+        try:
+            # 检查文件是否存在
+            if not file_path.exists():
+                print(f"❌ 文件不存在: {file_path}")
+                return False
+                
+            # 检查文件大小
+            file_size = file_path.stat().st_size
+            if file_size == 0:
+                print(f"❌ 文件为空: {file_path}")
+                return False
+                
+            # 尝试读取文件
+            try:
+                with open(file_path, 'rb') as f:
+                    # 读取第一个块来验证文件可访问性
+                    first_chunk = f.read(8192)  # 8KB
+                    if first_chunk is None:
+                        print(f"❌ 文件无法读取: {file_path}")
+                        return False
+            except Exception as e:
+                print(f"❌ 文件读取失败: {e}")
+                return False
+                
+            print(f"✅ 文件完整性验证通过: {file_path.name}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 文件验证失败: {e}")
             import traceback
             traceback.print_exc()
             return False
