@@ -205,8 +205,26 @@ class ClipboardListener:
                 display_text = text[:max_display] + ("..." if len(text) > max_display else "")
                 print(f"📥 已复制文本: \"{display_text}\"")
                 
-            # ... 其他消息类型的处理 ...
-                
+            elif message["type"] == MessageType.FILE:
+                # 处理文件消息
+                files = message.get("files", [])
+                if files:
+                    await self.file_handler.handle_received_files(
+                        message, 
+                        sender_websocket,
+                        self.broadcast_encrypted_data
+                    )
+                    
+            elif message["type"] == MessageType.FILE_RESPONSE:
+                # 处理文件响应 - 移除 await
+                if self.file_handler.handle_received_chunk(message):  # 直接调用，不使用 await
+                    # 文件接收完成，更新剪贴板
+                    filename = message.get("filename")
+                    if filename in self.file_handler.file_transfers:
+                        file_path = self.file_handler.file_transfers[filename]["path"]
+                        self.file_handler.set_clipboard_file(file_path)
+                        print(f"✅ 文件已添加到剪贴板: {filename}")
+                    
         except Exception as e:
             print(f"❌ 接收数据处理错误: {e}")
             import traceback
