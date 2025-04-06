@@ -294,13 +294,31 @@ class FileHandler:
                 
             save_path = self.temp_dir / filename
             
-            # 使用文件锁确保并发安全
-            import fcntl
-            with open(save_path, "ab") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                f.seek(chunk_index * 512 * 1024)  # 定位到正确的位置
-                f.write(chunk_data)
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            # 使用 msvcrt 在 Windows 上进行文件锁定，或在 Unix 上使用 fcntl
+            if IS_WINDOWS:
+                import msvcrt
+                with open(save_path, "ab") as f:
+                    try:
+                        # 锁定文件
+                        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, chunk_size)
+                        f.seek(chunk_index * 512 * 1024)  # 定位到正确的位置
+                        f.write(chunk_data)
+                    finally:
+                        # 解锁文件
+                        try:
+                            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, chunk_size)
+                        except:
+                            pass  # Ignore unlock errors
+            else:
+                # Unix/Mac 系统使用 fcntl
+                import fcntl
+                with open(save_path, "ab") as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    try:
+                        f.seek(chunk_index * 512 * 1024)
+                        f.write(chunk_data)
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 
             # 更新传输状态
             if filename not in self.file_transfers:
