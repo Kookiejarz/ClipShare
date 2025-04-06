@@ -1,13 +1,13 @@
-# ClipShare: 安全跨平台剪贴板同步工具
+# UniPaste: 安全跨平台剪贴板同步工具
 
-![ClipShare](https://img.shields.io/badge/ClipShare-1.0.0-blue)
+![UniPaste](https://img.shields.io/badge/UniPaste-1.0.0-blue)
 ![Python](https://img.shields.io/badge/Python-3.7+-green)
 
-ClipShare 是一个端到端加密的跨平台剪贴板同步工具，支持 Mac 和 Windows 设备之间安全地共享剪贴板内容。
+UniPaste是一个端到端加密的跨平台剪贴板同步工具，支持 Mac 和 Windows 设备之间安全地共享剪贴板内容。
 
 ## 特性
 - **实时同步**：在设备间即时同步剪贴板内容
-- **端到端加密**：使用高级 AES-256-GCM 加密保护所有传输数据
+- **端到端加密**：使用 AES-256-GCM 加密保护所有传输数据
 - **零配置网络**：自动在本地网络中发现设备，无需手动设置 IP 地址
 - **防止剪贴板循环**：智能检测并防止剪贴板内容在设备间无限循环
 - **支持多种内容**：支持文本、文件路径 (图像支持在开发中)
@@ -15,7 +15,7 @@ ClipShare 是一个端到端加密的跨平台剪贴板同步工具，支持 Mac
 ## 安装
 
 ### 前置要求
-- Python 3.7 或更高版本
+- Python 3.9 或更高版本
 - pip 包管理器
 
 ### 安装依赖
@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 ### 在 Mac 上启动服务端
 ```sh
-python server.py
+python mac_clip_check.py 
 ```
 
 ### 在 Windows 上启动客户端
@@ -48,27 +48,10 @@ ClipShare 使用多层加密技术确保数据安全：
 - **AES-256-GCM**：高级加密标准和认证加密模式
 - **临时测试密钥**：当前版本使用临时预共享密钥用于测试
 
-## 项目结构
-```
-ClipShare/
-├── server.py        # 服务器端程序 (Mac)
-├── windows_client.py # 客户端程序 (Windows)
-├── requirements.txt # 依赖列表
-├── README.md        # 说明文档
-└── utils/           # 工具模块
-```
-
-## 开发指南
-
-### 添加新功能
-- **支持更多平台**：为 Linux 或移动平台添加支持
-- **图像共享**：添加对图像剪贴板内容的支持
-- **更好的授权机制**：添加设备认证和记住授权设备功能
-
 ### 本地开发环境
 ```sh
-git clone https://github.com/Kookiejarz/ClipShare.git 
-cd ClipShare
+git clone https://github.com/Kookiejarz/UniPaste.git
+cd UniPaste
 pip install -r requirements.txt
 ```
 
@@ -102,3 +85,4 @@ pip install -r requirements.txt
 - **pyperclip** 提供的剪贴板操作
 
 > ⚠️ **注意**：此项目为原型演示，不建议用于安全敏感的应用场景。
+
