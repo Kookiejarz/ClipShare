@@ -297,7 +297,7 @@ class WindowsClipboardClient:
             win32clipboard.OpenClipboard()
             try:
                 # 首先尝试获取文件类型格式
-                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
+                if (win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP)):
                     file_paths = win32clipboard.GetClipboardData(win32con.CF_HDROP)
                     if file_paths:
                         paths = list(file_paths)
@@ -385,6 +385,8 @@ class WindowsClipboardClient:
     async def send_clipboard_changes(self, websocket):
         """监控并发送剪贴板变化"""
         last_send_attempt = 0
+        last_processed_content = None
+        min_interval = 0.5  # 最小检查间隔（秒）
         
         async def broadcast_fn(data):
             await websocket.send(data)
@@ -396,27 +398,43 @@ class WindowsClipboardClient:
                     continue
                     
                 current_time = time.time()
+                
+                # 检查是否达到最小间隔时间
+                if current_time - last_send_attempt < min_interval:
+                    await asyncio.sleep(0.1)
+                    continue
+                    
                 current_content = pyperclip.paste()
                 
-                # 处理文本内容
-                if current_content:
-                    self.last_content_hash, self.last_update_time = await self.file_handler.process_clipboard_content(
-                        current_content,
-                        current_time,
-                        self.last_content_hash,
-                        self.last_update_time,
-                        broadcast_fn
-                    )
-                
-                # 处理文件
-                file_paths = self._get_clipboard_file_paths()
-                if file_paths:
-                    self.last_content_hash = await self.file_handler.handle_clipboard_files(
-                        file_paths,
-                        self.last_content_hash,
-                        broadcast_fn
-                    )
+                # 只有当内容真正发生变化时才处理
+                if current_content != last_processed_content:
+                    # 处理文本内容
+                    if current_content:
+                        content_hash = hashlib.md5(current_content.encode()).hexdigest()
+                        
+                        # 检查是否是自己刚刚设置的内容
+                        if (content_hash != self.last_content_hash or 
+                            current_time - self.last_update_time > 1.0):  # 1秒后允许重新发送相同内容
+                            
+                            self.last_content_hash, self.last_update_time = await self.file_handler.process_clipboard_content(
+                                current_content,
+                                current_time,
+                                self.last_content_hash,
+                                self.last_update_time,
+                                broadcast_fn
+                            )
+                            last_processed_content = current_content
                     
+                    # 处理文件
+                    file_paths = self._get_clipboard_file_paths()
+                    if file_paths:
+                        self.last_content_hash = await self.file_handler.handle_clipboard_files(
+                            file_paths,
+                            self.last_content_hash,
+                            broadcast_fn
+                        )
+                        
+                last_send_attempt = current_time
                 await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                 
             except asyncio.CancelledError:
@@ -579,6 +597,39 @@ class WindowsClipboardClient:
         bar = '█' * filled_length + '░' * (length - filled_length)
         percent_str = f"{int(percent*100):3}%"
         return f"|{bar}| {current}/{total} ({percent_str})"
+
+    async def _handle_text_message(self, message):
+        """处理收到的文本消息"""
+        try:
+            text = message.get("content", "")
+            if not text:
+                print("⚠️ 收到空文本消息")
+                return
+                
+            # 检查是否是临时文件路径
+            if self._looks_like_temp_file_path(text):
+                return
+                
+            # 计算文本哈希用于防止循环
+            content_hash = hashlib.md5(text.encode()).hexdigest()
+            if content_hash == self.last_content_hash:
+                print("⏭️ 跳过重复内容")
+                return
+                
+            # 更新剪贴板
+            pyperclip.copy(text)
+            self.last_content_hash = content_hash
+            self.last_update_time = time.time()
+            
+            # 显示收到的文本(限制长度)
+            max_display = 50
+            display_text = text[:max_display] + ("..." if len(text) > max_display else "")
+            print(f"📥 已复制文本: \"{display_text}\"")
+            
+        except Exception as e:
+            print(f"❌ 处理文本消息失败: {e}")
+        finally:
+            self.is_receiving = False
 
 def main():
     client = WindowsClipboardClient()
