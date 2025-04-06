@@ -4,6 +4,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import os
 import base64
+import json
 
 class SecurityManager:
     def __init__(self):
@@ -150,3 +151,54 @@ class SecurityManager:
             print(f"数据长度: {len(encrypted_data)} 字节")
             print(f"数据预览 (十六进制): {encrypted_data[:20].hex()}")
             raise
+
+    async def perform_key_exchange(self, send_data_func, receive_data_func):
+        """
+        Perform key exchange using provided send and receive functions
+        
+        Args:
+            send_data_func: async function to send data
+            receive_data_func: async function to receive data
+            
+        Returns:
+            bool: True if key exchange was successful
+        """
+        try:
+            # Generate our key pair if needed
+            if not self.public_key:
+                self.generate_key_pair()
+            
+            # Serialize and send our public key
+            server_public_key = self.serialize_public_key()
+            key_message = json.dumps({
+                "type": "key_exchange",
+                "public_key": server_public_key
+            })
+            await send_data_func(key_message)
+            print("📤 已发送公钥")
+            
+            # Receive peer's public key
+            response = await receive_data_func()
+            peer_data = json.loads(response)
+            
+            if peer_data.get("type") == "key_exchange":
+                peer_key_data = peer_data.get("public_key")
+                peer_public_key = self.deserialize_public_key(peer_key_data)
+                
+                # Generate shared key
+                self.generate_shared_key(peer_public_key)
+                print("🔒 密钥交换完成，已建立共享密钥")
+                
+                # Send confirmation
+                await send_data_func(json.dumps({
+                    "type": "key_exchange_complete",
+                    "status": "success"
+                }))
+                return True
+            else:
+                print("❌ 对方未发送公钥")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 密钥交换失败: {e}")
+            return False

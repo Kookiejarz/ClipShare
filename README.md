@@ -78,7 +78,6 @@ pip install -r requirements.txt
 - Windows 权限问题可能阻止写入剪贴板，尝试以 **管理员权限** 运行。
 
 
-
 ## 致谢
 - **Zeroconf** 提供的网络服务发现
 - **websockets** 提供的 WebSocket 实现
