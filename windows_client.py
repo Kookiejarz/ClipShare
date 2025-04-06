@@ -655,20 +655,22 @@ class WindowsClipboardClient:
                 # 将文件路径添加到Windows剪贴板
                 try:
                     import win32clipboard
-                    import win32con
+                    from win32com.shell import shell, shellcon
                     
+                    # 创建DROPFILES结构
+                    drop_effect = shell.DataObject()
+                    file_list = [str(file_path)]
+                    drop_effect.SetData(shellcon.CF_HDROP, 0, file_list)
+                    
+                    # 更新剪贴板
                     win32clipboard.OpenClipboard()
                     try:
                         win32clipboard.EmptyClipboard()
-                        # 创建文件路径列表
-                        file_list = [str(file_path)]
-                        
-                        # 将文件列表放入剪贴板
-                        win32clipboard.SetClipboardData(win32con.CF_HDROP, tuple(file_list))
+                        drop_effect.PutToClipboard()
                         print(f"📎 已将文件添加到剪贴板，可用于复制粘贴: {filename}")
                     finally:
                         win32clipboard.CloseClipboard()
-                        
+                    
                     # 更新内容哈希以防止回传
                     self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
                     self.last_update_time = time.time()
@@ -677,6 +679,19 @@ class WindowsClipboardClient:
                     print(f"❌ 设置剪贴板文件失败: {e}")
                     import traceback
                     traceback.print_exc()
+                    
+                    # 尝试使用备用方法
+                    try:
+                        from win32com.shell import shell, shellcon
+                        import pythoncom
+                        
+                        pythoncom.CoInitialize()
+                        drop_effect = shell.DataObject()
+                        drop_effect.SetData(shellcon.CF_HDROP, 0, [str(file_path)])
+                        drop_effect.PutToClipboard()
+                        print(f"📎 使用备用方法添加文件到剪贴板成功: {filename}")
+                    except Exception as backup_err:
+                        print(f"❌ 备用方法也失败了: {backup_err}")
         
         except Exception as e:
             print(f"❌ 处理文件响应失败: {e}")
