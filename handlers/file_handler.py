@@ -45,48 +45,43 @@ class FileHandler:
                 
                 if not path_obj.exists():
                     print(f"❌ 文件确实不存在: {file_path}")
-                    # 创建并发送文件不存在响应
-                    response = {
-                        "type": MessageType.FILE_RESPONSE,
-                        "filename": path_obj.name,
-                        "exists": False,
-                        "path": str(path_obj),
-                        "error": "File does not exist"
-                    }
-                    
-                    encrypted_resp = self.security_mgr.encrypt_message(
-                        json.dumps(response).encode('utf-8')
-                    )
-                    await broadcast_fn(encrypted_resp)
-                    print(f"📤 已发送文件不存在响应: {path_obj.name}")
                     return False
 
             print(f"✅ 文件已找到: {path_obj}")
             file_size = path_obj.stat().st_size
             print(f"📤 开始处理文件: {path_obj.name} ({file_size} 字节)")
 
-            # 创建并发送文件存在响应
-            response = {
-                "type": MessageType.FILE_RESPONSE,
-                "filename": path_obj.name,
-                "exists": True,
-                "path": str(path_obj)
-            }
-            
-            encrypted_resp = self.security_mgr.encrypt_message(
-                json.dumps(response).encode('utf-8')
+            # 创建文件消息
+            file_msg = ClipMessage.file_message([str(path_obj)])
+            message_json = ClipMessage.serialize(file_msg)
+            encrypted_data = self.security_mgr.encrypt_message(
+                message_json.encode('utf-8')
             )
-            await broadcast_fn(encrypted_resp)
-
-            # 根据文件大小选择传输方式
-            if file_size <= 10 * 1024 * 1024:  # 10MB
-                await self._transfer_small_file(path_obj, file_size, broadcast_fn)
-            else:
-                await self.send_large_file(str(path_obj), broadcast_fn)
-            return True
+            await broadcast_fn(encrypted_data)
             
+            # 读取并发送文件内容
+            with open(path_obj, 'rb') as f:
+                chunk_data = f.read()
+                if chunk_data:
+                    response = {
+                        'type': MessageType.FILE_RESPONSE,
+                        'filename': path_obj.name,
+                        'exists': True,
+                        'chunk_data': base64.b64encode(chunk_data).decode('utf-8'),
+                        'chunk_index': 0,
+                        'total_chunks': 1
+                    }
+                    
+                    encrypted_resp = self.security_mgr.encrypt_message(
+                        json.dumps(response).encode('utf-8')
+                    )
+                    await broadcast_fn(encrypted_resp)
+                    print(f"📤 已发送文件内容: {path_obj.name}")
+                    
+                return True
+                
         except Exception as e:
-            print(f"❌ 文件传输错误: {e}")
+            print(f"❌ 文件传输失败: {e}")
             import traceback
             traceback.print_exc()
             return False
