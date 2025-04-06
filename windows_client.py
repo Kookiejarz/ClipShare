@@ -14,6 +14,7 @@ from utils.network.discovery import DeviceDiscovery
 from utils.message_format import ClipMessage, MessageType
 from handlers.file_handler import FileHandler
 from utils.platform_config import verify_platform, IS_WINDOWS
+from config import ClipboardConfig
 import tempfile
 
 # Verify platform at startup
