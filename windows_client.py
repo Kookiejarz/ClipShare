@@ -631,6 +631,58 @@ class WindowsClipboardClient:
         finally:
             self.is_receiving = False
 
+    async def _handle_file_response(self, message):
+        """处理接收到的文件响应"""
+        try:
+            # 解析文件信息
+            filename = message.get("filename")
+            chunk_data = base64.b64decode(message.get("chunk_data", ""))
+            chunk_index = message.get("chunk_index", 0)
+            total_chunks = message.get("total_chunks", 1)
+            
+            if not filename or not chunk_data:
+                print("⚠️ 收到的文件响应缺少必要信息")
+                return
+            
+            # 通过FileHandler处理文件块
+            is_complete = self.file_handler.handle_received_chunk(message)
+            
+            # 如果文件传输完成
+            if is_complete:
+                file_path = self.file_handler.file_transfers[filename]["path"]
+                print(f"✅ 文件接收完成: {file_path}")
+                
+                # 将文件路径添加到Windows剪贴板
+                try:
+                    import win32clipboard
+                    import win32con
+                    
+                    win32clipboard.OpenClipboard()
+                    try:
+                        win32clipboard.EmptyClipboard()
+                        # 创建文件路径列表
+                        file_list = [str(file_path)]
+                        
+                        # 将文件列表放入剪贴板
+                        win32clipboard.SetClipboardData(win32con.CF_HDROP, tuple(file_list))
+                        print(f"📎 已将文件添加到剪贴板，可用于复制粘贴: {filename}")
+                    finally:
+                        win32clipboard.CloseClipboard()
+                        
+                    # 更新内容哈希以防止回传
+                    self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
+                    self.last_update_time = time.time()
+                    
+                except Exception as e:
+                    print(f"❌ 设置剪贴板文件失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+        
+        except Exception as e:
+            print(f"❌ 处理文件响应失败: {e}")
+        finally:
+            self.is_receiving = False
+
 def main():
     client = WindowsClipboardClient()
     

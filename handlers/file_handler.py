@@ -218,6 +218,18 @@ class FileHandler:
             file_hash = hashlib.md5(complete_data).hexdigest()
             self.add_to_file_cache(file_hash, str(save_path))
             
+            # Add to clipboard on Mac
+            if IS_MACOS:
+                pasteboard = AppKit.NSPasteboard.generalPasteboard()
+                pasteboard.clearContents()
+                url = AppKit.NSURL.fileURLWithPath_(str(save_path))
+                urls = AppKit.NSArray.arrayWithObject_(url)
+                success = pasteboard.writeObjects_(urls)
+                if success:
+                    print(f"📎 已将文件添加到Mac剪贴板: {transfer['filename']}")
+                else:
+                    print("❌ 添加文件到剪贴板失败")
+            
         except Exception as e:
             print(f"\n❌ 保存文件失败: {e}")
             
@@ -369,19 +381,23 @@ class FileHandler:
                 pasteboard.clearContents()
                 url = AppKit.NSURL.fileURLWithPath_(path_str)
                 urls = AppKit.NSArray.arrayWithObject_(url)
-                pasteboard.writeObjects_(urls)
-                print(f"📋 已将文件添加到剪贴板: {os.path.basename(path_str)}")
-                return pasteboard.changeCount()
+                success = pasteboard.writeObjects_(urls)
+                if success:
+                    print(f"📎 已将文件添加到Mac剪贴板: {os.path.basename(path_str)}")
+                    return pasteboard.changeCount()
+                else:
+                    print("❌ 添加文件到剪贴板失败")
+                    return None
             elif IS_WINDOWS:
-                # Use Windows specific clipboard API
                 import win32clipboard
                 import win32con
                 try:
                     win32clipboard.OpenClipboard()
                     win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardText(path_str)
+                    # Use CF_HDROP for proper file handling
+                    win32clipboard.SetClipboardData(win32con.CF_HDROP, tuple([path_str]))
                     win32clipboard.CloseClipboard()
-                    print(f"📋 已将文件路径添加到剪贴板: {os.path.basename(path_str)}")
+                    print(f"📎 已将文件添加到Windows剪贴板: {os.path.basename(path_str)}")
                     return True
                 except Exception as e:
                     print(f"❌ Windows剪贴板操作失败: {e}")
