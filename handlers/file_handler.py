@@ -282,32 +282,48 @@ class FileHandler:
             chunk_index = message.get("chunk_index", 0)
             total_chunks = message.get("total_chunks", 1)
             chunk_data = base64.b64decode(message.get("chunk_data", ""))
+            chunk_hash = message.get("chunk_hash")
             
             if not chunk_data:
-                print(f"⚠️ 文件 {filename} 的数据块为空")
+                return False
+                
+            # 验证块的完整性
+            if chunk_hash and hashlib.md5(chunk_data).hexdigest() != chunk_hash:
+                print(f"⚠️ 块 {chunk_index} 校验失败")
                 return False
                 
             save_path = self.temp_dir / filename
-            mode = "wb" if chunk_index == 0 else "ab"
             
-            with open(save_path, mode) as f:
+            # 使用文件锁确保并发安全
+            import fcntl
+            with open(save_path, "ab") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                f.seek(chunk_index * 512 * 1024)  # 定位到正确的位置
                 f.write(chunk_data)
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 
             # 更新传输状态
             if filename not in self.file_transfers:
                 self.file_transfers[filename] = {
-                    "received_chunks": 1,
+                    "received_chunks": set([chunk_index]),
                     "total_chunks": total_chunks,
                     "path": save_path
                 }
             else:
-                self.file_transfers[filename]["received_chunks"] += 1
-                
+                self.file_transfers[filename]["received_chunks"].add(chunk_index)
+            
             # 检查是否完成
             transfer = self.file_transfers[filename]
-            if transfer["received_chunks"] == total_chunks:
-                return True
-                
+            is_complete = len(transfer["received_chunks"]) == transfer["total_chunks"]
+            
+            if is_complete:
+                # 验证文件完整性
+                if self._verify_file_integrity(save_path):
+                    return True
+                else:
+                    print(f"⚠️ 文件 {filename} 完整性验证失败")
+                    return False
+                    
             return False
             
         except Exception as e:

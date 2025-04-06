@@ -776,63 +776,96 @@ class WindowsClipboardClient:
             self.is_receiving = False
 
     async def handle_file_transfer(self, file_path: str, broadcast_fn):
-        """处理文件传输"""
+        """处理文件传输，支持大文件的分块多线程传输"""
         path_obj = Path(file_path)
+        chunk_size = 512 * 1024  # 512KB per chunk
         
-        # 检查文件是否存在并且可读
-        if not path_obj.exists():
-            print(f"⚠️ 文件不存在: {file_path}")
-            return False
-            
-        if not path_obj.is_file():
-            print(f"⚠️ 不是有效的文件: {file_path}")
+        if not path_obj.exists() or not path_obj.is_file():
+            print(f"⚠️ 文件不存在或无效: {file_path}")
             return False
             
         try:
-            # 确保文件可读
-            with open(path_obj, 'rb') as f:
-                pass
-                
             file_size = path_obj.stat().st_size
-            print(f"📤 正在处理文件: {path_obj.name} ({file_size} 字节)")
+            total_chunks = (file_size + chunk_size - 1) // chunk_size
+            print(f"📤 开始传输文件: {path_obj.name} ({file_size/1024/1024:.1f}MB, {total_chunks}块)")
             
-            # 创建文件响应消息
-            response = {
+            # 创建初始消息
+            initial_msg = {
                 'type': MessageType.FILE_RESPONSE,
                 'filename': path_obj.name,
                 'exists': True,
-                'path': str(path_obj)
+                'total_size': file_size,
+                'total_chunks': total_chunks,
+                'chunk_size': chunk_size
             }
             
-            # 加密并发送文件信息
-            encrypted_resp = self.security_mgr.encrypt_message(
-                json.dumps(response).encode('utf-8')
+            # 发送文件信息
+            encrypted_info = self.security_mgr.encrypt_message(
+                json.dumps(initial_msg).encode('utf-8')
             )
-            await broadcast_fn(encrypted_resp)
+            await broadcast_fn(encrypted_info)
             
-            # 发送文件内容
-            with open(path_obj, 'rb') as f:
-                chunk = f.read()
-                chunk_data = base64.b64encode(chunk).decode('utf-8')
+            async def send_chunk(chunk_index):
+                """发送单个文件块"""
+                try:
+                    offset = chunk_index * chunk_size
+                    with open(path_obj, 'rb') as f:
+                        f.seek(offset)
+                        chunk_data = f.read(chunk_size)
+                        if chunk_data:
+                            chunk_msg = {
+                                'type': MessageType.FILE_RESPONSE,
+                                'filename': path_obj.name,
+                                'exists': True,
+                                'chunk_data': base64.b64encode(chunk_data).decode('utf-8'),
+                                'chunk_index': chunk_index,
+                                'total_chunks': total_chunks,
+                                'chunk_hash': hashlib.md5(chunk_data).hexdigest()
+                            }
+                            encrypted_chunk = self.security_mgr.encrypt_message(
+                                json.dumps(chunk_msg).encode('utf-8')
+                            )
+                            await broadcast_fn(encrypted_chunk)
+                            return True
+                    return False
+                except Exception as e:
+                    print(f"❌ 块 {chunk_index} 传输失败: {e}")
+                    return False
+            
+            # 使用信号量限制并发数
+            semaphore = asyncio.Semaphore(3)  # 最多3个并发传输
+            
+            async def send_chunk_with_semaphore(chunk_index):
+                async with semaphore:
+                    return await send_chunk(chunk_index)
+            
+            # 创建所有块的传输任务
+            chunk_tasks = []
+            for i in range(total_chunks):
+                task = asyncio.create_task(send_chunk_with_semaphore(i))
+                chunk_tasks.append(task)
                 
-                file_msg = {
-                    'type': MessageType.FILE_RESPONSE,
-                    'filename': path_obj.name,
-                    'exists': True,
-                    'chunk_data': chunk_data,
-                    'chunk_index': 0,
-                    'total_chunks': 1
-                }
+                # 显示进度
+                if (i + 1) % 5 == 0 or i == total_chunks - 1:
+                    progress = self._display_progress(i + 1, total_chunks)
+                    print(f"\r📤 传输文件 {path_obj.name}: {progress}", end="", flush=True)
                 
-                encrypted_data = self.security_mgr.encrypt_message(
-                    json.dumps(file_msg).encode('utf-8')
-                )
-                await broadcast_fn(encrypted_data)
-                
-            return True
+                # 每个块之间添加小延迟，防止网络拥塞
+                await asyncio.sleep(0.05)
+            
+            # 等待所有块传输完成
+            results = await asyncio.gather(*chunk_tasks, return_exceptions=True)
+            success_count = sum(1 for r in results if r is True)
+            
+            if success_count == total_chunks:
+                print(f"\n✅ 文件 {path_obj.name} 传输完成 ({success_count}/{total_chunks} 块)")
+                return True
+            else:
+                print(f"\n⚠️ 文件 {path_obj.name} 传输不完整 ({success_count}/{total_chunks} 块)")
+                return False
                 
         except Exception as e:
-            print(f"❌ 文件传输失败: {e}")
+            print(f"\n❌ 文件传输失败: {e}")
             import traceback
             traceback.print_exc()
             return False
