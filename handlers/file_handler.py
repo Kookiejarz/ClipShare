@@ -4,8 +4,12 @@ import json
 import base64
 import asyncio
 import os
-import AppKit
+from utils.platform_config import IS_MACOS, IS_WINDOWS
 from utils.message_format import ClipMessage, MessageType
+
+# Only import AppKit on macOS
+if IS_MACOS:
+    import AppKit
 
 class FileHandler:
     """文件处理管理器"""
@@ -223,13 +227,28 @@ class FileHandler:
         """将文件路径设置到剪贴板"""
         try:
             path_str = str(file_path)
-            pasteboard = AppKit.NSPasteboard.generalPasteboard()
-            pasteboard.clearContents()
-            url = AppKit.NSURL.fileURLWithPath_(path_str)
-            urls = AppKit.NSArray.arrayWithObject_(url)
-            pasteboard.writeObjects_(urls)
-            print(f"📋 已将文件添加到剪贴板: {os.path.basename(path_str)}")
-            return pasteboard.changeCount()
+            if IS_MACOS:
+                pasteboard = AppKit.NSPasteboard.generalPasteboard()
+                pasteboard.clearContents()
+                url = AppKit.NSURL.fileURLWithPath_(path_str)
+                urls = AppKit.NSArray.arrayWithObject_(url)
+                pasteboard.writeObjects_(urls)
+                print(f"📋 已将文件添加到剪贴板: {os.path.basename(path_str)}")
+                return pasteboard.changeCount()
+            elif IS_WINDOWS:
+                # Use Windows specific clipboard API
+                import win32clipboard
+                import win32con
+                try:
+                    win32clipboard.OpenClipboard()
+                    win32clipboard.EmptyClipboard()
+                    win32clipboard.SetClipboardText(path_str)
+                    win32clipboard.CloseClipboard()
+                    print(f"📋 已将文件路径添加到剪贴板: {os.path.basename(path_str)}")
+                    return True
+                except Exception as e:
+                    print(f"❌ Windows剪贴板操作失败: {e}")
+                    return None
         except Exception as e:
             print(f"❌ 设置剪贴板文件失败: {e}")
             return None

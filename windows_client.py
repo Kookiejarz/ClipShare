@@ -13,8 +13,17 @@ from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
 from utils.message_format import ClipMessage, MessageType
 from handlers.file_handler import FileHandler
-import win32clipboard
+from utils.platform_config import verify_platform, IS_WINDOWS
 import tempfile
+
+# Verify platform at startup
+verify_platform('windows')
+
+if IS_WINDOWS:
+    import win32clipboard
+    import win32con
+else:
+    raise RuntimeError("This script requires Windows")
 
 class ConnectionStatus:
     """连接状态枚举"""
