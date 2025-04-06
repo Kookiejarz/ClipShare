@@ -682,23 +682,39 @@ class WindowsClipboardClient:
                 file_path = self.file_handler.file_transfers[filename]["path"]
                 print(f"✅ 文件接收完成: {file_path}")
                 
-                # 将文件路径添加到Windows剪贴板
                 try:
                     import win32clipboard
                     import win32con
-                    from ctypes import sizeof, c_wchar_p, create_unicode_buffer
+                    from ctypes import sizeof, create_unicode_buffer, Structure, c_wchar, c_uint
+                    import struct
                     
-                    # 准备文件路径
-                    file_list = str(file_path) + '\0'  # 以null结尾
-                    buffer = create_unicode_buffer(file_list)
+                    class DROPFILES(Structure):
+                        _fields_ = [
+                            ('pFiles', c_uint),  # offset of file list
+                            ('pt', c_uint * 2),  # drop point
+                            ('fNC', c_uint),     # is it on non-client area
+                            ('fWide', c_uint),   # wide character flag
+                        ]
                     
-                    # 打开剪贴板
+                    # 准备文件路径（确保以null结尾）
+                    files = str(file_path) + '\0'
+                    file_bytes = files.encode('utf-16le') + b'\0\0'
+                    
+                    # 创建DROPFILES结构
+                    df = DROPFILES()
+                    df.pFiles = sizeof(df)
+                    df.pt[0] = df.pt[1] = 0
+                    df.fNC = 0
+                    df.fWide = 1
+                    
+                    # 组合数据
+                    data = bytes(df) + file_bytes
+                    
+                    # 设置到剪贴板
                     win32clipboard.OpenClipboard()
                     try:
                         win32clipboard.EmptyClipboard()
-                        
-                        # 使用 CF_HDROP 格式设置文件路径
-                        win32clipboard.SetClipboardData(win32con.CF_HDROP, buffer)
+                        win32clipboard.SetClipboardData(win32con.CF_HDROP, data)
                         print(f"📎 已将文件添加到剪贴板，可用于复制粘贴: {filename}")
                     finally:
                         win32clipboard.CloseClipboard()
@@ -712,18 +728,37 @@ class WindowsClipboardClient:
                     import traceback
                     traceback.print_exc()
                     
-                    # 作为备用方案，尝试使用文本方式设置路径
+                    # 备用方案：使用 shell32 API
                     try:
+                        from win32com.shell import shell, shellcon
+                        import pythoncom
+                        
+                        pythoncom.CoInitialize()
+                        data_obj = pythoncom.CoCreateInstance(
+                            shell.CLSID_DragDropHelper,
+                            None,
+                            pythoncom.CLSCTX_INPROC_SERVER,
+                            shell.IID_IDropTarget
+                        )
+                        
+                        data_obj.SetData([(shellcon.CF_HDROP, None, [str(file_path)])])
                         win32clipboard.OpenClipboard()
                         try:
                             win32clipboard.EmptyClipboard()
-                            win32clipboard.SetClipboardText(str(file_path))
-                            print(f"📎 使用文本方式添加文件路径到剪贴板: {filename}")
+                            win32clipboard.SetClipboardData(win32con.CF_HDROP, data_obj)
+                            print(f"📎 使用备用方法添加文件到剪贴板: {filename}")
                         finally:
                             win32clipboard.CloseClipboard()
+                            
                     except Exception as backup_err:
                         print(f"❌ 备用方法也失败了: {backup_err}")
-        
+                        # 最后的备用方案：仅设置文本路径
+                        try:
+                            pyperclip.copy(str(file_path))
+                            print(f"📎 已将文件路径作为文本复制到剪贴板: {filename}")
+                        except:
+                            print("❌ 所有剪贴板操作方法都失败了")
+    
         except Exception as e:
             print(f"❌ 处理文件响应失败: {e}")
         finally:
