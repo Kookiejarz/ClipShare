@@ -13,26 +13,48 @@ from utils.message_format import ClipMessage, MessageType
 import tempfile
 from pathlib import Path
 import hashlib
+from handlers.file_handler import FileHandler
 
 class ClipboardListener:
+    """剪贴板监听和同步服务器"""
+    
     def __init__(self):
-        self.pasteboard = AppKit.NSPasteboard.generalPasteboard()
-        self.last_change_count = self.pasteboard.changeCount()
-        self.last_content_hash = None  # 添加内容哈希来避免重复发送
-        self.security_mgr = SecurityManager()
-        self.auth_mgr = DeviceAuthManager()
-        self.connected_clients = set()
-        self.discovery = DeviceDiscovery()
+        """初始化剪贴板监听器"""
+        self._init_basic_components()
+        self._init_state_flags()
+        self._init_file_handling()
         self._init_encryption()
-        self.is_receiving = False  # Flag to avoid clipboard loops
-        self.last_update_time = 0  # 记录最后一次更新剪贴板的时间
-        self.running = True  # 控制运行状态的标志
-        self.server = None  # 保存WebSocket服务器引用，用于关闭
-        self.temp_dir = Path(tempfile.gettempdir()) / "unipaste_files"
-        self.temp_dir.mkdir(exist_ok=True)
-        self.file_transfers = {}  # 跟踪文件传输状态
-        self.file_cache = {}  # 文件哈希缓存，格式: {hash: 路径}
-        self.load_file_cache()  # 加载缓存信息
+        
+    def _init_basic_components(self):
+        """初始化基础组件"""
+        try:
+            self.pasteboard = AppKit.NSPasteboard.generalPasteboard()
+            self.security_mgr = SecurityManager()
+            self.auth_mgr = DeviceAuthManager()
+            self.discovery = DeviceDiscovery()
+            self.connected_clients = set()
+            print("✅ 基础组件初始化成功")
+        except Exception as e:
+            print(f"❌ 基础组件初始化失败: {e}")
+            raise
+        
+    def _init_state_flags(self):
+        """初始化状态标志"""
+        self.last_change_count = self.pasteboard.changeCount()
+        self.last_content_hash = None
+        self.is_receiving = False
+        self.last_update_time = 0
+        self.running = True
+        self.server = None
+        
+    def _init_file_handling(self):
+        """初始化文件处理相关"""
+        try:
+            self.temp_dir = Path(tempfile.gettempdir()) / "unipaste_files"
+            self.file_handler = FileHandler(self.temp_dir, self.security_mgr)
+        except Exception as e:
+            print(f"❌ 文件处理初始化失败: {e}")
+            raise
 
     def _init_encryption(self):
         """初始化加密系统"""
@@ -42,6 +64,22 @@ class ClipboardListener:
             print("✅ 加密系统初始化成功")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
+            raise
+        
+    def load_file_cache(self):
+        """加载文件缓存信息"""
+        cache_path = self.temp_dir / "filecache.json"
+        try:
+            if cache_path.exists():
+                with open(cache_path, "r") as f:
+                    self.file_cache = json.load(f)
+                print(f"📚 已加载 {len(self.file_cache)} 个文件缓存条目")
+            else:
+                self.file_cache = {}
+                print("📝 创建新的文件缓存")
+        except Exception as e:
+            print(f"⚠️ 加载文件缓存失败: {e}，将使用空缓存")
+            self.file_cache = {}
     
 
     async def handle_client(self, websocket):
@@ -181,52 +219,14 @@ class ClipboardListener:
                 print("📋 已从客户端更新剪贴板")
             
             elif message["type"] == MessageType.FILE:
-                # 收到文件信息
-                files = message["files"]
-                if not files:
-                    print("❌ 收到空的文件列表")
-                    self.is_receiving = False
-                    return
-                    
-                file_names = [f["filename"] for f in files]
-                print(f"📥 收到文件信息: {', '.join(file_names[:3])}{' 等' if len(file_names) > 3 else ''}")
-                
-                # 计算文件信息的哈希值，防止重复接收
-                file_info_hash = hashlib.md5(str(files).encode()).hexdigest()
-                self.last_content_hash = file_info_hash
-                
-                # 对每个文件处理
-                for file_info in files:
-                    file_path = file_info.get("path", "")
-                    if not file_path:
-                        print("⚠️ 收到的文件信息中缺少路径")
-                        continue
-                        
-                    file_hash = file_info.get("hash", "")
-                    filename = file_info.get("filename", os.path.basename(file_path))
-                    
-                    print(f"📥 准备下载文件: {filename}")
-                    
-                    # 创建文件请求消息
-                    file_req = ClipMessage.file_request_message(file_path)
-                    req_json = ClipMessage.serialize(file_req)
-                    encrypted_req = self.security_mgr.encrypt_message(req_json.encode('utf-8'))
-                    
-                    # 只向发送者请求文件
-                    if sender_websocket and sender_websocket in self.connected_clients:
-                        await sender_websocket.send(encrypted_req)
-                        print(f"📤 向源设备请求文件: {filename}")
-                    else:
-                        # 如果不知道发送者，则广播请求（不理想但作为后备）
-                        await self.broadcast_encrypted_data(encrypted_req)
-                        print(f"📤 广播文件请求: {filename}")
-                
-                # 标记最后更新时间，防止重复发送
+                # 使用文件处理器处理文件信息
+                self.last_content_hash = await self.file_handler.handle_received_files(
+                    message,
+                    sender_websocket,
+                    self.broadcast_encrypted_data
+                )
                 self.last_update_time = time.time()
-                
-                # 重置接收标志
-                self.is_receiving = False
-
+            
             elif message["type"] == MessageType.FILE_RESPONSE:
                 # 收到文件内容响应
                 filename = message.get("filename", "未知文件")
@@ -237,109 +237,20 @@ class ClipboardListener:
                     self.is_receiving = False
                     return
                 
-                # 解析文件块信息
-                chunk_index = message.get("chunk_index", 0)
-                total_chunks = message.get("total_chunks", 1)
-                chunk_data = base64.b64decode(message["chunk_data"])
-                chunk_hash = message.get("chunk_hash", "")
-                
-                # 验证块哈希
-                calculated_chunk_hash = hashlib.md5(chunk_data).hexdigest()
-                if chunk_hash and calculated_chunk_hash != chunk_hash:
-                    print(f"⚠️ 文件块 {filename} ({chunk_index+1}/{total_chunks}) 哈希验证失败")
-                    # 可以在此添加重试逻辑
-                    self.is_receiving = False
-                    return
-                
-                # 保存文件块
-                save_path = self.temp_dir / filename
-                
-                # 如果是第一块，创建或清空文件
-                if chunk_index == 0:
-                    # 记录完整文件哈希用于最终验证
-                    file_hash = message.get("file_hash", "")
-                    
-                    with open(save_path, "wb") as f:
-                        f.write(chunk_data)
-                    self.file_transfers[filename] = {
-                        "received_chunks": 1,
-                        "total_chunks": total_chunks,
-                        "path": save_path,
-                        "file_hash": file_hash
-                    }
-                    print(f"📥 开始接收文件: {filename} (块 1/{total_chunks})")
-                else:
-                    # 否则追加到文件
-                    with open(save_path, "ab") as f:
-                        f.write(chunk_data)
-                    
-                    # 更新接收状态
-                    if filename in self.file_transfers:
-                        self.file_transfers[filename]["received_chunks"] += 1
-                        received = self.file_transfers[filename]["received_chunks"]
-                        total = self.file_transfers[filename]["total_chunks"]
-                        print(f"📥 接收文件块: {filename} ({chunk_index+1}/{total_chunks}, 进度: {received}/{total})")
-                    else:
-                        # 处理中间块先到达的情况
-                        print(f"⚠️ 收到乱序的文件块: {filename} (块 {chunk_index+1}/{total_chunks})")
-                        self.file_transfers[filename] = {
-                            "received_chunks": 1,
-                            "total_chunks": total_chunks,
-                            "path": save_path
-                        }
-                
-                # 检查文件是否接收完成
-                if (filename in self.file_transfers and 
-                    self.file_transfers[filename]["received_chunks"] == total_chunks):
-                    print(f"✅ 文件接收完成: {save_path}")
-                    
-                    # 验证完整文件哈希
-                    expected_hash = self.file_transfers[filename].get("file_hash")
-                    if expected_hash:
-                        # 确保导入了 ClipMessage 的 calculate_file_hash
-                        from utils.message_format import ClipMessage
-                        
-                        calculated_hash = ClipMessage.calculate_file_hash(str(save_path))
-                        if calculated_hash == expected_hash:
-                            print(f"✓ 文件哈希验证成功: {filename}")
-                            # 添加到文件缓存
-                            self.add_to_file_cache(calculated_hash, str(save_path))
-                        else:
-                            print(f"❌ 文件哈希验证失败: {filename}")
-                            # 请求重传
-                            if sender_websocket and sender_websocket in self.connected_clients:
-                                file_req = ClipMessage.file_request_message(message["path"])
-                                req_json = ClipMessage.serialize(file_req)
-                                encrypted_req = self.security_mgr.encrypt_message(req_json.encode('utf-8'))
-                                await sender_websocket.send(encrypted_req)
-                                print(f"🔄 请求重新传输文件: {filename}")
-                                self.is_receiving = False
-                                return
-                    
-                    # 将文件路径放入剪贴板
-                    try:
-                        # 标记哈希以避免重复发送
-                        path_str = str(save_path)
-                        self.last_content_hash = hashlib.md5(path_str.encode()).hexdigest()
-                        self.last_update_time = time.time()  # 设置时间戳，防止立即触发发送
-                        
-                        # 在Mac上设置文件URL剪贴板
-                        pasteboard = AppKit.NSPasteboard.generalPasteboard()
-                        pasteboard.clearContents()
-                        url = AppKit.NSURL.fileURLWithPath_(path_str)
-                        urls = AppKit.NSArray.arrayWithObject_(url)
-                        pasteboard.writeObjects_(urls)
-                        self.last_change_count = pasteboard.changeCount()
-                        print(f"📋 已将文件 {filename} 添加到剪贴板")
-                    except Exception as e:
-                        print(f"❌ 设置剪贴板文件失败: {e}")
-                
-                # 重置接收标志
-                self.is_receiving = False
-
-            # 延长延迟时间以防止循环，重要修改: 先重置标志，再等待
+                # 处理文件块和验证
+                success = self.file_handler.handle_received_chunk(message)
+                if success:
+                    new_count = self.file_handler.set_clipboard_file(
+                        self.file_handler.file_transfers[filename]["path"]
+                    )
+                    if new_count:
+                        self.last_change_count = new_count
+                        self.last_update_time = time.time()
+        
+            # 重置接收标志并添加延迟
             self.is_receiving = False
-            await asyncio.sleep(1.5)  # 增加延迟时间
+            await asyncio.sleep(1.5)
+        
         except Exception as e:
             print(f"❌ 接收数据处理错误: {e}")
             self.is_receiving = False
@@ -441,49 +352,21 @@ class ClipboardListener:
             if AppKit.NSPasteboardTypeString in types:
                 text = self.pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
                 
-                # 如果内容为空，不处理
-                if not text or text.strip() == "":
-                    return
-                
-                # 如果看起来像临时文件路径，跳过
-                if self._looks_like_temp_file_path(text):
-                    return
-                
-                # 计算内容哈希，用于防止重复发送
-                content_hash = hashlib.md5(text.encode()).hexdigest()
-                
-                # 如果和上次接收/发送的内容相同，则跳过
-                if content_hash == self.last_content_hash:
-                    print(f"⏭️ 跳过重复内容: 哈希值 {content_hash[:8]}... 相同")
-                    return
-                
-                # 添加延迟检查 - 如果距离上次更新剪贴板时间太短，可能是我们自己刚刚更新的
+                # 使用 FileHandler 处理文本内容
                 current_time = time.time()
-                if current_time - self.last_update_time < 1.0:  # 增加延迟阈值
-                    print(f"⏱️ 延迟检查: 距离上次更新时间 {current_time - self.last_update_time:.2f}秒，可能是自己更新的内容")
-                    return
+                new_hash, new_time = await self.file_handler.process_clipboard_content(
+                    text, 
+                    current_time,
+                    self.last_content_hash,
+                    self.last_update_time,
+                    self.broadcast_encrypted_data
+                )
                 
-                self.last_content_hash = content_hash
-                
-                # 显示发送的内容（限制字符数）
-                max_display_len = 100
-                display_content = text if len(text) <= max_display_len else text[:max_display_len] + "..."
-                print(f"📤 发送文本: \"{display_content}\"")
-                
-                # 创建文本消息
-                text_msg = ClipMessage.text_message(text)
-                message_json = ClipMessage.serialize(text_msg)
-                
-                # 加密并广播
-                encrypted_data = self.security_mgr.encrypt_message(message_json.encode('utf-8'))
-                print("🔐 加密后的文本")
-                
-                # 非常重要: 先设置上次更新时间，再广播，这样可以避免自己广播后自己又接收
-                self.last_update_time = time.time()
-                await self.broadcast_encrypted_data(encrypted_data)
+                self.last_content_hash = new_hash
+                self.last_update_time = new_time
             
             if AppKit.NSPasteboardTypeFileURL in types:
-                # 获取文件URL
+                # 获取文件URL列表
                 file_urls = []
                 for item in self.pasteboard.pasteboardItems():
                     if item.availableTypeFromArray_([AppKit.NSPasteboardTypeFileURL]):
@@ -497,68 +380,15 @@ class ClipboardListener:
                             if file_url:
                                 file_path = file_url.path()
                                 file_urls.append(file_path)
-                
-                if not file_urls:
-                    return
-                
-                # 计算文件路径哈希
-                file_str = str(file_urls)
-                content_hash = hashlib.md5(file_str.encode()).hexdigest()
-                
-                # 如果和上次接收/发送的内容相同，则跳过
-                if content_hash == self.last_content_hash:
-                    print("⏭️ 跳过重复文件路径")
-                    return
-                
-                self.last_content_hash = content_hash
-                
-                # 显示发送的文件路径
-                file_names = [os.path.basename(p) for p in file_urls]
-                print(f"📤 发送文件: {', '.join(file_names[:3])}{' 等' if len(file_names) > 3 else ''}")
-                
-                # 创建文件消息
-                file_msg = ClipMessage.file_message(file_urls)
-                message_json = ClipMessage.serialize(file_msg)
-                
-                # 加密并广播文件元数据
-                encrypted_data = self.security_mgr.encrypt_message(message_json.encode('utf-8'))
-                print("🔐 加密后的文件消息")
-                await self.broadcast_encrypted_data(encrypted_data)
 
-                # 直接开始传输文件内容，无需等待客户端请求
-                # 在服务器自动传输小文件（小于10MB的文件），大文件仍然等待请求
-                print("🔄 准备主动传输文件内容...")
-                for file_path in file_urls:
-                    path_obj = Path(file_path)
-                    if not path_obj.exists():
-                        print(f"⚠️ 文件不存在: {file_path}")
-                        continue
-                        
-                    # 检查文件大小，如果小于10MB，自动传输
-                    file_size = path_obj.stat().st_size
-                    if file_size <= 10 * 1024 * 1024:  # 10MB
-                        chunk_size = 1024 * 1024  # 1MB 块大小
-                        total_chunks = (file_size + chunk_size - 1) // chunk_size
-                        
-                        print(f"📤 自动传输文件: {path_obj.name} (总大小: {file_size} 字节, {total_chunks} 块)")
-                        
-                        # 分块发送文件
-                        for i in range(total_chunks):
-                            response = ClipMessage.file_response_message(
-                                file_path, 
-                                chunk_index=i,
-                                total_chunks=total_chunks
-                            )
-                            resp_json = ClipMessage.serialize(response)
-                            encrypted_resp = self.security_mgr.encrypt_message(resp_json.encode('utf-8'))
-                            
-                            # 广播给所有客户端
-                            await self.broadcast_encrypted_data(encrypted_resp)
-                            print(f"📤 已自动发送文件块: {path_obj.name} ({i+1}/{total_chunks})")
-                            # 短暂延迟，避免网络拥塞
-                            await asyncio.sleep(0.05)
-                    else:
-                        print(f"ℹ️ 文件过大 ({file_size/1024/1024:.1f} MB)，等待客户端请求再传输: {path_obj.name}")
+                if file_urls:
+                    # 使用文件处理器处理文件传输
+                    self.last_content_hash = await self.file_handler.handle_clipboard_files(
+                        file_urls, 
+                        self.last_content_hash,
+                        self.broadcast_encrypted_data
+                    )
+                    self.last_update_time = time.time()
 
             if AppKit.NSPasteboardTypePNG in types:
                 print("⚠️ 图片加密暂不支持")
@@ -580,40 +410,6 @@ class ClipboardListener:
             send_to_websocket,
             receive_from_websocket
         )
-
-    def load_file_cache(self):
-        """加载文件缓存信息"""
-        cache_path = self.temp_dir / "filecache.json"
-        if cache_path.exists():
-            try:
-                with open(cache_path, "r") as f:
-                    self.file_cache = json.load(f)
-                print(f"📚 已加载 {len(self.file_cache)} 个文件缓存条目")
-            except:
-                print("❌ 加载文件缓存失败，将使用空缓存")
-                self.file_cache = {}
-
-    def save_file_cache(self):
-        """保存文件缓存信息"""
-        cache_path = self.temp_dir / "filecache.json"
-        try:
-            with open(cache_path, "w") as f:
-                json.dump(self.file_cache, f)
-        except:
-            print("❌ 保存文件缓存失败")
-
-    def add_to_file_cache(self, file_hash, file_path):
-        """添加文件到缓存"""
-        if Path(file_path).exists():
-            self.file_cache[file_hash] = str(file_path)
-            self.save_file_cache()
-
-    def get_from_file_cache(self, file_hash):
-        """从缓存获取文件路径"""
-        path = self.file_cache.get(file_hash)
-        if path and Path(path).exists():
-            return path
-        return None
 
     def _looks_like_temp_file_path(self, text):
         """检查文本是否看起来像临时文件路径"""
