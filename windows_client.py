@@ -389,8 +389,11 @@ class WindowsClipboardClient:
         min_interval = 0.5  # 最小检查间隔（秒）
         
         async def broadcast_fn(data):
-            await websocket.send(data)
-            
+            try:
+                await websocket.send(data)
+            except Exception as e:
+                print(f"❌ 发送数据失败: {e}")
+        
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
             try:
                 if self.is_receiving:
@@ -407,33 +410,30 @@ class WindowsClipboardClient:
                 current_content = pyperclip.paste()
                 
                 # 只有当内容真正发生变化时才处理
-                if current_content != last_processed_content:
-                    # 处理文本内容
-                    if current_content:
-                        content_hash = hashlib.md5(current_content.encode()).hexdigest()
-                        
-                        # 检查是否是自己刚刚设置的内容
-                        if (content_hash != self.last_content_hash or 
-                            current_time - self.last_update_time > 1.0):  # 1秒后允许重新发送相同内容
-                            
-                            self.last_content_hash, self.last_update_time = await self.file_handler.process_clipboard_content(
-                                current_content,
-                                current_time,
-                                self.last_content_hash,
-                                self.last_update_time,
-                                broadcast_fn
-                            )
-                            last_processed_content = current_content
+                if current_content and current_content != last_processed_content:
+                    # 创建文本消息
+                    text_msg = ClipMessage.text_message(current_content)
+                    message_json = ClipMessage.serialize(text_msg)
                     
-                    # 处理文件
-                    file_paths = self._get_clipboard_file_paths()
-                    if file_paths:
-                        self.last_content_hash = await self.file_handler.handle_clipboard_files(
-                            file_paths,
-                            self.last_content_hash,
-                            broadcast_fn
-                        )
+                    # 检查是否是自己刚刚设置的内容
+                    content_hash = hashlib.md5(current_content.encode()).hexdigest()
+                    if (content_hash != self.last_content_hash or 
+                        current_time - self.last_update_time > 1.0):  # 1秒后允许重新发送相同内容
                         
+                        # 加密并发送
+                        encrypted_data = self.security_mgr.encrypt_message(message_json.encode('utf-8'))
+                        await broadcast_fn(encrypted_data)
+                        
+                        # 更新状态
+                        self.last_content_hash = content_hash
+                        self.last_update_time = current_time
+                        last_processed_content = current_content
+                        
+                        # 显示发送的内容（限制长度）
+                        max_display = 50
+                        display_text = current_content[:max_display] + ("..." if len(current_content) > max_display else "")
+                        print(f"📤 已发送文本: \"{display_text}\"")
+                
                 last_send_attempt = current_time
                 await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                 
