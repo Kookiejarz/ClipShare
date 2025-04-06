@@ -1,12 +1,13 @@
-/.DS_Store
+# Mac system files
+.DS_Store
 **/.DS_Store
-utils/__pycache__/__init__.cpython-313.pyc
-utils/__pycache__/__init__.cpython-313.pyc
-utils/network/__pycache__/__init__.cpython-313.pyc
-utils/network/__pycache__/__init__.cpython-313.pyc
-utils/network/__pycache__/discovery.cpython-313.pyc
-utils/security/__pycache__/__init__.cpython-313.pyc
-utils/security/__pycache__/crypto.cpython-313.pyc
+
+# Python cache files
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# App specific files
 .dstore/
-# 认证和密钥文件
 ~/.clipshare/
