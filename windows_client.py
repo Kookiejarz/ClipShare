@@ -407,32 +407,60 @@ class WindowsClipboardClient:
                     await asyncio.sleep(0.1)
                     continue
                     
-                current_content = pyperclip.paste()
-                
-                # 只有当内容真正发生变化时才处理
-                if current_content and current_content != last_processed_content:
-                    # 创建文本消息
-                    text_msg = ClipMessage.text_message(current_content)
-                    message_json = ClipMessage.serialize(text_msg)
+                # 首先检查是否有文件
+                file_paths = self._get_clipboard_file_paths()
+                if file_paths:
+                    # 如果有文件，创建并发送文件消息
+                    file_msg = ClipMessage.file_message(file_paths)
+                    message_json = ClipMessage.serialize(file_msg)
                     
-                    # 检查是否是自己刚刚设置的内容
-                    content_hash = hashlib.md5(current_content.encode()).hexdigest()
-                    if (content_hash != self.last_content_hash or 
-                        current_time - self.last_update_time > 1.0):  # 1秒后允许重新发送相同内容
-                        
+                    # 计算文件信息的哈希值
+                    content_hash = hashlib.md5(str(file_paths).encode()).hexdigest()
+                    
+                    # 检查是否是刚刚处理过的内容
+                    if content_hash != self.last_content_hash:
                         # 加密并发送
-                        encrypted_data = self.security_mgr.encrypt_message(message_json.encode('utf-8'))
+                        encrypted_data = self.security_mgr.encrypt_message(
+                            message_json.encode('utf-8')
+                        )
                         await broadcast_fn(encrypted_data)
+                        
+                        # 处理文件传输
+                        print("🔄 准备传输文件内容...")
+                        for file_path in file_paths:
+                            await self.handle_file_transfer(file_path, broadcast_fn)
                         
                         # 更新状态
                         self.last_content_hash = content_hash
                         self.last_update_time = current_time
-                        last_processed_content = current_content
-                        
-                        # 显示发送的内容（限制长度）
-                        max_display = 50
-                        display_text = current_content[:max_display] + ("..." if len(current_content) > max_display else "")
-                        print(f"📤 已发送文本: \"{display_text}\"")
+                else:
+                    # 如果没有文件，检查文本内容
+                    current_content = pyperclip.paste()
+                    
+                    # 只有当内容真正发生变化时才处理
+                    if current_content and current_content != last_processed_content:
+                        # 检查是否是自己刚刚设置的内容
+                        content_hash = hashlib.md5(current_content.encode()).hexdigest()
+                        if (content_hash != self.last_content_hash or 
+                            current_time - self.last_update_time > 1.0):
+                            
+                            # 创建并发送文本消息
+                            text_msg = ClipMessage.text_message(current_content)
+                            message_json = ClipMessage.serialize(text_msg)
+                            encrypted_data = self.security_mgr.encrypt_message(
+                                message_json.encode('utf-8')
+                            )
+                            await broadcast_fn(encrypted_data)
+                            
+                            # 更新状态
+                            self.last_content_hash = content_hash
+                            self.last_update_time = current_time
+                            last_processed_content = current_content
+                            
+                            # 显示发送的内容
+                            max_display = 50
+                            display_text = current_content[:max_display] + ("..." if len(current_content) > max_display else "")
+                            print(f"📤 已发送文本: \"{display_text}\"")
                 
                 last_send_attempt = current_time
                 await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
@@ -442,6 +470,8 @@ class WindowsClipboardClient:
             except Exception as e:
                 if self.running and self.connection_status == ConnectionStatus.CONNECTED:
                     print(f"❌ 发送错误: {e}")
+                    import traceback
+                    traceback.print_exc()
                     if "connection" in str(e).lower():
                         self.connection_status = ConnectionStatus.DISCONNECTED
                         break
