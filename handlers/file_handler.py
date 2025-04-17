@@ -482,23 +482,16 @@ class FileHandler:
                 try:
                     import win32clipboard
                     import win32con
-                    import pythoncom
-                    from win32com.shell import shell, shellcon
-
-                    # 必须初始化COM
-                    pythoncom.CoInitialize()
-
                     win32clipboard.OpenClipboard()
                     win32clipboard.EmptyClipboard()
-
-                    # 构造 CF_HDROP 格式的数据
-                    file_list = [path_str]
-                    data = shell.SHCreateDataObject(
-                        None, file_list, None, shellcon.CF_HDROP
-                    )
-                    win32clipboard.SetClipboardData(shellcon.CF_HDROP, data)
+                    # 支持多文件：用\0分隔，结尾双\0
+                    if isinstance(file_path, (list, tuple)):
+                        file_list = '\0'.join([str(f) for f in file_path]) + '\0\0'
+                    else:
+                        file_list = str(file_path) + '\0\0'
+                    win32clipboard.SetClipboardData(win32con.CF_HDROP, file_list)
                     win32clipboard.CloseClipboard()
-                    print(f"📎 已将文件添加到Windows剪贴板: {os.path.basename(path_str)}")
+                    print(f"📎 已将文件添加到Windows剪贴板: {os.path.basename(str(file_path))}")
                     return True
                 except Exception as e:
                     print(f"❌ Windows剪贴板操作失败: {e}")
