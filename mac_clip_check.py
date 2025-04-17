@@ -42,6 +42,7 @@ class ClipboardListener:
         self.last_update_time = 0
         self.running = True
         self.server = None
+        self.ignore_clipboard_until = 0  # 新增
         
     def _init_file_handling(self):
         try:
@@ -293,6 +294,9 @@ class ClipboardListener:
         while self.running:
             try:
                 current_time = time.time()
+                if current_time < self.ignore_clipboard_until:
+                    await asyncio.sleep(0.3)
+                    continue
                 time_since_update = current_time - self.last_update_time
                 time_since_process = current_time - last_processed_time
                 

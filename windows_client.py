@@ -216,7 +216,7 @@ class WindowsClipboardClient:
 
     async def send_clipboard_changes(self, websocket):
         last_send_attempt = 0
-        min_interval = 0.5
+        min_interval = 5
         async def broadcast_fn(data):
             try:
                 await websocket.send(data)
