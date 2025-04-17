@@ -1,4 +1,5 @@
 import asyncio
+import os
 import websockets
 import pyperclip
 import json
@@ -225,17 +226,7 @@ class WindowsClipboardClient:
                         self._last_paths_hash = paths_hash
                         print(f"📎 剪贴板中包含 {len(paths)} 个文件")
                         return [str(path) for path in paths]
-                # 不再每次都打印剪贴板格式
-                # 如需调试可手动打开下方注释
-                # else:
-                #     formats = []
-                #     fmt = 0
-                #     while True:
-                #         fmt = win32clipboard.EnumClipboardFormats(fmt)
-                #         if fmt == 0:
-                #             break
-                #         formats.append(fmt)
-                #     print(f"📋 当前剪贴板格式: {', '.join(str(f) for f in formats)}")
+            # 不再每次都打印剪贴板格式和“没有文件格式数据”
             finally:
                 win32clipboard.CloseClipboard()
         except Exception:
