@@ -582,3 +582,51 @@ class FileHandler:
                 print(f"⏭️ 跳过临时文件路径: \"{text[:40]}...\"")
                 return True
         return False
+
+    def get_clipboard_text(self):
+        """获取剪贴板中的文本内容（支持Mac和Windows）"""
+        if IS_MACOS:
+            pasteboard = AppKit.NSPasteboard.generalPasteboard()
+            text = pasteboard.stringForType_(AppKit.NSStringPboardType)
+            return text
+        elif IS_WINDOWS:
+            try:
+                import win32clipboard
+                win32clipboard.OpenClipboard()
+                data = win32clipboard.GetClipboardData()
+                win32clipboard.CloseClipboard()
+                return data
+            except Exception as e:
+                print(f"❌ 获取Windows剪贴板文本失败: {e}")
+                return None
+        else:
+            print("⚠️ 当前平台不支持剪贴板文本获取")
+            return None
+
+    def get_clipboard_files(self):
+        """获取剪贴板中的文件路径列表（支持Mac和Windows）"""
+        if IS_MACOS:
+            pasteboard = AppKit.NSPasteboard.generalPasteboard()
+            classes = [AppKit.NSURL]
+            options = {}
+            urls = pasteboard.readObjectsForClasses_options_(classes, options)
+            if urls:
+                return [str(url.path()) for url in urls]
+            return []
+        elif IS_WINDOWS:
+            try:
+                import win32clipboard
+                import win32con
+                win32clipboard.OpenClipboard()
+                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
+                    files = win32clipboard.GetClipboardData(win32con.CF_HDROP)
+                    win32clipboard.CloseClipboard()
+                    return list(files)
+                win32clipboard.CloseClipboard()
+                return []
+            except Exception as e:
+                print(f"❌ 获取Windows剪贴板文件失败: {e}")
+                return []
+        else:
+            print("⚠️ 当前平台不支持剪贴板文件获取")
+            return []
