@@ -358,6 +358,7 @@ class WindowsClipboardClient:
         print("DEBUG: send_clipboard_changes task finished.") # Add this line
 
     async def receive_clipboard_changes(self, websocket):
+        print("DEBUG: ENTERING receive_clipboard_changes function.") # <--- ADD THIS LINE
         async def broadcast_fn(data):
             try:
                 await websocket.send(data)
@@ -561,7 +562,7 @@ class WindowsClipboardClient:
         while self.running:
             try:
                 if self.connection_status != last_status:
-                    if status_line:
+                    if (status_line):
                         import sys
                         sys.stdout.write("\r" + " " * len(status_line) + "\r")
                     status_line = status_messages.get(self.connection_status, "⚪ 未知状态")

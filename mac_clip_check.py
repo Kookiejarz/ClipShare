@@ -140,34 +140,75 @@ class ClipboardListener:
             
             # 执行密钥交换
             if not await self.perform_key_exchange(websocket):
-                print("❌ 密钥交换失败，断开连接")
-                return
-            
+                print(f"❌ 密钥交换失败 for {device_id}, 断开连接") # Added device_id
+                return # Ensure exit if key exchange fails
+
             # 身份验证和密钥交换都通过，添加到客户端列表
             self.connected_clients.add(websocket)
             print(f"✅ 设备 {device_id} 已连接并完成密钥交换")
-            
+
             # 之后接收的都是二进制加密数据
             while self.running:
                 try:
+                    # Use a slightly longer timeout, mainly to check self.running periodically
                     encrypted_data = await asyncio.wait_for(
-                        websocket.recv(), 
-                        timeout=0.5  # 设置较短的超时，以便可以定期检查running标志
+                        websocket.recv(),
+                        timeout=5.0 # Increased timeout
                     )
-                    # 传递发送者的WebSocket连接对象
+                    # Pass the sender's WebSocket connection object
                     await self.process_received_data(encrypted_data, sender_websocket=websocket)
+
                 except asyncio.TimeoutError:
-                    # 超时只是用来检查running标志，不是错误
-                    continue
+                    # Timeout is not an error, just check if still running
+                    if not self.running:
+                        print(f"DEBUG: Server stopping, exiting handle_client loop for {device_id}")
+                        break
+                    continue # Continue waiting for data
+
+                # --- Explicitly catch websocket closure exceptions ---
+                except websockets.exceptions.ConnectionClosedOK:
+                    print(f"DEBUG: Client {device_id} closed connection normally.")
+                    break # Exit the loop
+                except websockets.exceptions.ConnectionClosedError as e:
+                    print(f"DEBUG: Client {device_id} closed connection with error: {e}")
+                    break # Exit the loop
+                # --- End explicit closure handling ---
+
                 except asyncio.CancelledError:
                     print(f"⏹️ {device_id} 的连接处理已取消")
-                    break
-                
-        except websockets.exceptions.ConnectionClosed:
-            print(f"📴 设备 {device_id or '未知设备'} 断开连接")
+                    break # Exit the loop
+
+                except Exception as e:
+                    # Catch other unexpected errors during recv/process
+                    print(f"❌ Error in handle_client loop for {device_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Decide if we should break or continue
+                    if isinstance(e, websockets.exceptions.WebSocketException):
+                         print(f"DEBUG: WebSocketException occurred, breaking loop for {device_id}")
+                         break # Treat other websocket errors as fatal for this connection
+                    await asyncio.sleep(1) # Avoid tight loop on other errors
+
+            print(f"DEBUG: Exited handle_client loop for {device_id}")
+
+        # Outer exception handlers remain for initial connection/auth/key-exchange errors
+        except websockets.exceptions.ConnectionClosed as e: # Catch closure during initial phases
+             print(f"📴 设备 {device_id or '未知设备'} 在连接初期断开: {e}")
+        except Exception as e: # Catch other initial errors
+             print(f"❌ 处理客户端 {device_id or '未知设备'} 时发生意外错误: {e}")
+             import traceback
+             traceback.print_exc()
         finally:
+            print(f"DEBUG: Cleaning up connection for {device_id or '未知设备'}")
             if websocket in self.connected_clients:
                 self.connected_clients.remove(websocket)
+            # Ensure websocket is closed from server-side if not already
+            if not websocket.close:
+                 try:
+                     await websocket.close()
+                 except Exception as close_err:
+                     print(f"DEBUG: Error closing websocket for {device_id}: {close_err}")
+            print(f"DEBUG: Connection cleanup finished for {device_id or '未知设备'}")
 
     async def process_received_data(self, encrypted_data, sender_websocket=None):
         """处理从客户端接收到的加密数据"""
