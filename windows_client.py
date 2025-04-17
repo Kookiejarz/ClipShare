@@ -288,7 +288,6 @@ class WindowsClipboardClient:
                 print(f"❌ 发送数据失败: {e}")
         print("DEBUG: send_clipboard_changes task started.") # Add this line
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
-            print("DEBUG: send_clipboard_changes loop iteration.") # Add this line
             try:
                 # 新增：严格忽略窗口
                 if time.time() < getattr(self, "ignore_clipboard_until", 0):
