@@ -226,6 +226,7 @@ class WindowsClipboardClient:
                 print(f"❌ 发送数据失败: {e}")
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
             try:
+                # 新增：严格忽略窗口
                 if time.time() < getattr(self, "ignore_clipboard_until", 0):
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                     continue
@@ -383,7 +384,7 @@ class WindowsClipboardClient:
             self.last_content_hash = content_hash
             self.last_remote_hash = content_hash
             self.last_update_time = time.time()
-            self.ignore_clipboard_until = time.time() + 2.0
+            self.ignore_clipboard_until = time.time() + 2.5  # 延长忽略时间
             max_display = 50
             display_text = text[:max_display] + ("..." if len(text) > max_display else "")
             print(f"📥 已复制文本: \"{display_text}\"")
@@ -409,6 +410,7 @@ class WindowsClipboardClient:
                     self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
                     self.last_remote_hash = self.last_content_hash  # 新增：防止回环
                     self.last_update_time = time.time()
+                    self.ignore_clipboard_until = time.time() + 2.0  # 文件也延长忽略时间
                 except Exception as e:
                     print(f"❌ 设置剪贴板文件失败: {e}")
         except Exception as e:

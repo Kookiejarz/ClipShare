@@ -42,7 +42,7 @@ class ClipboardListener:
         self.last_update_time = 0
         self.running = True
         self.server = None
-        self.ignore_clipboard_until = 0  # 新增
+        self.ignore_clipboard_until = 2  # 新增
         
     def _init_file_handling(self):
         try:
