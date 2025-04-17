@@ -190,6 +190,7 @@ class ClipboardListener:
                 self.file_handler.set_clipboard_text(text)
                 self.last_change_count = self.pasteboard.changeCount()
                 self.last_update_time = time.time()
+                self.last_content_hash = hashlib.md5(text.encode()).hexdigest()
                 
                 # 显示接收到的文本(限制长度)
                 max_display = 50
@@ -207,14 +208,15 @@ class ClipboardListener:
                     )
                     
             elif message["type"] == MessageType.FILE_RESPONSE:
-                # 处理文件响应 - 移除 await
-                if self.file_handler.handle_received_chunk(message):  # 直接调用，不使用 await
-                    # 文件接收完成，更新剪贴板
+                if self.file_handler.handle_received_chunk(message):
                     filename = message.get("filename")
                     if filename in self.file_handler.file_transfers:
                         file_path = self.file_handler.file_transfers[filename]["path"]
                         self.file_handler.set_clipboard_file(file_path)
                         print(f"✅ 文件已添加到剪贴板: {filename}")
+                        # 新增：同步last_content_hash，防止回环
+                        self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
+                        self.last_update_time = time.time()
                     
         except Exception as e:
             print(f"❌ 接收数据处理错误: {e}")

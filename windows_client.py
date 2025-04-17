@@ -403,6 +403,7 @@ class WindowsClipboardClient:
                     self.file_handler.set_clipboard_file(file_path)
                     print(f"📎 已将文件添加到剪贴板: {filename}")
                     self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
+                    self.last_remote_hash = self.last_content_hash  # 新增：防止回环
                     self.last_update_time = time.time()
                 except Exception as e:
                     print(f"❌ 设置剪贴板文件失败: {e}")
