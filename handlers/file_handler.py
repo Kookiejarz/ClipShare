@@ -482,8 +482,8 @@ class FileHandler:
                 try:
                     win32clipboard.OpenClipboard()
                     win32clipboard.EmptyClipboard()
-                    # Use CF_HDROP for proper file handling
-                    win32clipboard.SetClipboardData(win32con.CF_HDROP, tuple([path_str]))
+                    # 这里应传递字符串列表（不是tuple也不是bytes）
+                    win32clipboard.SetClipboardData(win32con.CF_HDROP, [path_str])
                     win32clipboard.CloseClipboard()
                     print(f"📎 已将文件添加到Windows剪贴板: {os.path.basename(path_str)}")
                     return True
@@ -592,10 +592,15 @@ class FileHandler:
         elif IS_WINDOWS:
             try:
                 import win32clipboard
+                import win32con
                 win32clipboard.OpenClipboard()
-                data = win32clipboard.GetClipboardData()
+                # 先判断是否有文本格式
+                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                    data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+                    win32clipboard.CloseClipboard()
+                    return data
                 win32clipboard.CloseClipboard()
-                return data
+                return None
             except Exception as e:
                 print(f"❌ 获取Windows剪贴板文本失败: {e}")
                 return None
