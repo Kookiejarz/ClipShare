@@ -482,8 +482,8 @@ class FileHandler:
                 try:
                     win32clipboard.OpenClipboard()
                     win32clipboard.EmptyClipboard()
-                    # 正确格式：以\0分隔，结尾双\0
-                    file_list = '\0'.join([str(f) for f in file_paths]) + '\0\0'
+                    # 只支持单文件时这样写，多文件用 '\0'.join([...])+'\0\0'
+                    file_list = path_str + '\0\0'
                     win32clipboard.SetClipboardData(win32con.CF_HDROP, file_list)
                     win32clipboard.CloseClipboard()
                     print(f"📎 已将文件添加到Windows剪贴板: {os.path.basename(path_str)}")
