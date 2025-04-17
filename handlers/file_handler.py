@@ -480,11 +480,23 @@ class FileHandler:
                 import win32clipboard
                 import win32con
                 try:
+                    import win32clipboard
+                    import win32con
+                    import pythoncom
+                    from win32com.shell import shell, shellcon
+
+                    # 必须初始化COM
+                    pythoncom.CoInitialize()
+
                     win32clipboard.OpenClipboard()
                     win32clipboard.EmptyClipboard()
-                    # 只支持单文件时这样写，多文件用 '\0'.join([...])+'\0\0'
-                    file_list = path_str + '\0\0'
-                    win32clipboard.SetClipboardData(win32con.CF_HDROP, file_list)
+
+                    # 构造 CF_HDROP 格式的数据
+                    file_list = [path_str]
+                    data = shell.SHCreateDataObject(
+                        None, file_list, None, shellcon.CF_HDROP
+                    )
+                    win32clipboard.SetClipboardData(shellcon.CF_HDROP, data)
                     win32clipboard.CloseClipboard()
                     print(f"📎 已将文件添加到Windows剪贴板: {os.path.basename(path_str)}")
                     return True
