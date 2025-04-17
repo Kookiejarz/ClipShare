@@ -48,7 +48,8 @@ class WindowsClipboardClient:
             Path(tempfile.gettempdir()) / "clipshare_files",
             self.security_mgr
         )
-        self.ignore_clipboard_until = 1  # 新增：忽略剪贴板变化的截止时间
+        self.ignore_clipboard_until = 2
+        self.last_remote_hash = None  # 新增：记录最近收到的远程内容hash
 
     def _get_device_id(self):
         import socket, uuid
@@ -254,7 +255,6 @@ class WindowsClipboardClient:
                 print(f"❌ 发送数据失败: {e}")
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
             try:
-                # 新增：冷却期间不发送
                 if time.time() < getattr(self, "ignore_clipboard_until", 0):
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                     continue
@@ -267,9 +267,14 @@ class WindowsClipboardClient:
                     continue
                 file_paths = self._get_clipboard_file_paths()
                 if file_paths:
+                    content_hash = hashlib.md5(str(file_paths).encode()).hexdigest()
+                    if content_hash == self.last_remote_hash:
+                        # 跳过刚收到的远程文件
+                        await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                        continue
+                    # ...原有文件同步逻辑...
                     file_msg = ClipMessage.file_message(file_paths)
                     message_json = ClipMessage.serialize(file_msg)
-                    content_hash = hashlib.md5(str(file_paths).encode()).hexdigest()
                     if content_hash != self.last_content_hash:
                         encrypted_data = self.security_mgr.encrypt_message(
                             message_json.encode('utf-8')
@@ -283,6 +288,10 @@ class WindowsClipboardClient:
                     current_content = pyperclip.paste()
                     if current_content:
                         content_hash = hashlib.md5(current_content.encode()).hexdigest()
+                        if content_hash == self.last_remote_hash:
+                            # 跳过刚收到的远程文本
+                            await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                            continue
                         if (content_hash != self.last_content_hash or 
                             current_time - self.last_update_time > 1.0):
                             text_msg = ClipMessage.text_message(current_content)
@@ -398,8 +407,9 @@ class WindowsClipboardClient:
                 return
             pyperclip.copy(text)
             self.last_content_hash = content_hash
+            self.last_remote_hash = content_hash  # 记录远程hash
             self.last_update_time = time.time()
-            self.ignore_clipboard_until = time.time() + 1.5  # 冷却1.5秒，防止回环
+            self.ignore_clipboard_until = time.time() + 2.0  # 冷却2秒
             max_display = 50
             display_text = text[:max_display] + ("..." if len(text) > max_display else "")
             print(f"📥 已复制文本: \"{display_text}\"")
