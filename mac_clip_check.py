@@ -19,27 +19,23 @@ class ClipboardListener:
     """剪贴板监听和同步服务器"""
     
     def __init__(self):
-        """初始化剪贴板监听器"""
         self._init_basic_components()
         self._init_state_flags()
         self._init_file_handling()
         self._init_encryption()
         
     def _init_basic_components(self):
-        """初始化基础组件"""
         try:
             self.pasteboard = AppKit.NSPasteboard.generalPasteboard()
             self.security_mgr = SecurityManager()
             self.auth_mgr = DeviceAuthManager()
             self.discovery = DeviceDiscovery()
             self.connected_clients = set()
-            print("✅ 基础组件初始化成功")
         except Exception as e:
             print(f"❌ 基础组件初始化失败: {e}")
             raise
         
     def _init_state_flags(self):
-        """初始化状态标志"""
         self.last_change_count = self.pasteboard.changeCount()
         self.last_content_hash = None
         self.is_receiving = False
@@ -48,7 +44,6 @@ class ClipboardListener:
         self.server = None
         
     def _init_file_handling(self):
-        """初始化文件处理相关"""
         try:
             self.temp_dir = Path(tempfile.gettempdir()) / "unipaste_files"
             self.file_handler = FileHandler(self.temp_dir, self.security_mgr)
@@ -57,11 +52,8 @@ class ClipboardListener:
             raise
 
     def _init_encryption(self):
-        """初始化加密系统"""
         try:
-            # 只生成密钥对，不使用临时共享密钥
             self.security_mgr.generate_key_pair()
-            print("✅ 加密系统初始化成功")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")
             raise
