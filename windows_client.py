@@ -175,6 +175,7 @@ class WindowsClipboardClient:
                 receive_task = asyncio.create_task(self.receive_clipboard_changes(websocket), name="ReceiveTask")
                 print("DEBUG: Send/Receive tasks created in connect_and_sync")
 
+                print("DEBUG: About to await asyncio.wait...") # Add this line
                 # Wait for either task to complete (normally or with error)
                 done, pending = await asyncio.wait(
                     [send_task, receive_task],
@@ -226,7 +227,7 @@ class WindowsClipboardClient:
                 if send_task and not send_task.done():
                     print(f"DEBUG: Final cancellation check: Cancelling {send_task.get_name()}")
                     send_task.cancel()
-                if receive_task and not receive_task.done():
+                if receive_task and not send_task.done():
                     print(f"DEBUG: Final cancellation check: Cancelling {receive_task.get_name()}")
                     receive_task.cancel()
                 # Await final cancellations
@@ -262,7 +263,7 @@ class WindowsClipboardClient:
                 return True
             elif status == 'first_authorized':
                 token = response_data.get('token')
-                if token:
+                if (token):
                     self._save_device_token(token)
                     self.device_token = token
                     print(f"🆕 设备已授权并获取令牌")
@@ -285,7 +286,9 @@ class WindowsClipboardClient:
                 await websocket.send(data)
             except Exception as e:
                 print(f"❌ 发送数据失败: {e}")
+        print("DEBUG: send_clipboard_changes task started.") # Add this line
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
+            print("DEBUG: send_clipboard_changes loop iteration.") # Add this line
             try:
                 # 新增：严格忽略窗口
                 if time.time() < getattr(self, "ignore_clipboard_until", 0):
@@ -343,6 +346,7 @@ class WindowsClipboardClient:
                 last_send_attempt = current_time
                 await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
             except asyncio.CancelledError:
+                print("DEBUG: send_clipboard_changes cancelled.") # Add this line
                 break
             except Exception as e:
                 if self.running and self.connection_status == ConnectionStatus.CONNECTED:
@@ -351,11 +355,17 @@ class WindowsClipboardClient:
                         self.connection_status = ConnectionStatus.DISCONNECTED
                         break
                 await asyncio.sleep(1)
+        print("DEBUG: send_clipboard_changes task finished.") # Add this line
 
     async def receive_clipboard_changes(self, websocket):
         async def broadcast_fn(data):
-            await websocket.send(data)
+            try:
+                await websocket.send(data)
+            except Exception as e:
+                print(f"❌ 发送数据失败: {e}")
+        print("DEBUG: receive_clipboard_changes task started.") # Add this line
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
+            print("DEBUG: receive_clipboard_changes loop iteration.") # Add this line
             try:
                 received_data = await websocket.recv()
                 self.is_receiving = True
@@ -369,6 +379,7 @@ class WindowsClipboardClient:
                 elif message["type"] == MessageType.FILE_RESPONSE:
                     await self._handle_file_response(message)
             except asyncio.CancelledError:
+                print("DEBUG: receive_clipboard_changes cancelled.") # Add this line
                 break
             except Exception as e:
                 if self.running and self.connection_status == ConnectionStatus.CONNECTED:
@@ -378,6 +389,7 @@ class WindowsClipboardClient:
                         break
                 self.is_receiving = False
                 await asyncio.sleep(1)
+        print("DEBUG: receive_clipboard_changes task finished.") # Add this line
 
     async def perform_key_exchange(self, websocket):
         try:
