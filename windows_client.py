@@ -50,6 +50,8 @@ class WindowsClipboardClient:
         )
         self.ignore_clipboard_until = 2
         self.last_remote_hash = None  # 新增：记录最近收到的远程内容hash
+        self.last_clipboard_text = None
+        self.last_clipboard_files = None
 
     def _get_device_id(self):
         import socket, uuid
@@ -235,9 +237,9 @@ class WindowsClipboardClient:
                     await asyncio.sleep(0.1)
                     continue
 
-                # 统一通过 FileHandler 获取文件列表
+                # 检查文件
                 file_paths = self.file_handler.get_clipboard_files()
-                if file_paths:
+                if file_paths and file_paths != self.last_clipboard_files:
                     content_hash = hashlib.md5(str(file_paths).encode()).hexdigest()
                     if content_hash == self.last_remote_hash:
                         await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
@@ -253,10 +255,11 @@ class WindowsClipboardClient:
                             await self.handle_file_transfer(file_path, broadcast_fn)
                         self.last_content_hash = content_hash
                         self.last_update_time = current_time
+                        self.last_clipboard_files = file_paths  # 记录本次内容
                 else:
-                    # 统一通过 FileHandler 获取文本
+                    # 检查文本
                     current_content = self.file_handler.get_clipboard_text()
-                    if current_content:
+                    if current_content and current_content != self.last_clipboard_text:
                         content_hash = hashlib.md5(current_content.encode()).hexdigest()
                         if content_hash == self.last_remote_hash:
                             await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
@@ -271,6 +274,7 @@ class WindowsClipboardClient:
                             await broadcast_fn(encrypted_data)
                             self.last_content_hash = content_hash
                             self.last_update_time = current_time
+                            self.last_clipboard_text = current_content  # 记录本次内容
                             max_display = 50
                             display_text = current_content[:max_display] + ("..." if len(current_content) > max_display else "")
                             print(f"📤 已发送文本: \"{display_text}\"")
