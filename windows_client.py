@@ -48,6 +48,7 @@ class WindowsClipboardClient:
             Path(tempfile.gettempdir()) / "clipshare_files",
             self.security_mgr
         )
+        self.ignore_clipboard_until = 1  # 新增：忽略剪贴板变化的截止时间
 
     def _get_device_id(self):
         import socket, uuid
@@ -253,6 +254,10 @@ class WindowsClipboardClient:
                 print(f"❌ 发送数据失败: {e}")
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
             try:
+                # 新增：冷却期间不发送
+                if time.time() < getattr(self, "ignore_clipboard_until", 0):
+                    await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                    continue
                 if self.is_receiving:
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                     continue
@@ -394,6 +399,7 @@ class WindowsClipboardClient:
             pyperclip.copy(text)
             self.last_content_hash = content_hash
             self.last_update_time = time.time()
+            self.ignore_clipboard_until = time.time() + 1.5  # 冷却1.5秒，防止回环
             max_display = 50
             display_text = text[:max_display] + ("..." if len(text) > max_display else "")
             print(f"📥 已复制文本: \"{display_text}\"")
