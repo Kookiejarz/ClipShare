@@ -6,6 +6,7 @@ import json
 import hmac
 import hashlib
 import time
+import base64
 from pathlib import Path
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
