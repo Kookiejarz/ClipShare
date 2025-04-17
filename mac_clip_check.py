@@ -185,10 +185,9 @@ class ClipboardListener:
                 # 检查是否是临时文件路径
                 if self._looks_like_temp_file_path(text):
                     return
-                    
-                # 更新剪贴板
-                self.pasteboard.clearContents()
-                self.pasteboard.setString_forType_(text, AppKit.NSPasteboardTypeString)
+
+                # 通过 FileHandler 设置剪贴板文本
+                self.file_handler.set_clipboard_text(text)
                 self.last_change_count = self.pasteboard.changeCount()
                 self.last_update_time = time.time()
                 
@@ -316,12 +315,10 @@ class ClipboardListener:
 
     async def process_clipboard(self):
         """处理并加密剪贴板内容"""
-        types = self.pasteboard.types()
         try:
-            if AppKit.NSPasteboardTypeString in types:
-                text = self.pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
-                
-                # 使用 FileHandler 处理文本内容
+            # 通过 FileHandler 获取剪贴板文本
+            text = self.file_handler.get_clipboard_text()
+            if text:
                 current_time = time.time()
                 new_hash, new_time = await self.file_handler.process_clipboard_content(
                     text, 
@@ -330,38 +327,20 @@ class ClipboardListener:
                     self.last_update_time,
                     self.broadcast_encrypted_data
                 )
-                
                 self.last_content_hash = new_hash
                 self.last_update_time = new_time
-            
-            if AppKit.NSPasteboardTypeFileURL in types:
-                # 获取文件URL列表
-                file_urls = []
-                for item in self.pasteboard.pasteboardItems():
-                    if item.availableTypeFromArray_([AppKit.NSPasteboardTypeFileURL]):
-                        file_url_data = item.dataForType_(AppKit.NSPasteboardTypeFileURL)
-                        if file_url_data:
-                            file_url = AppKit.NSURL.URLWithString_(
-                                AppKit.NSString.alloc().initWithData_encoding_(
-                                    file_url_data, AppKit.NSUTF8StringEncoding
-                                )
-                            )
-                            if file_url:
-                                file_path = file_url.path()
-                                file_urls.append(file_path)
 
-                if file_urls:
-                    # 使用文件处理器处理文件传输
-                    self.last_content_hash = await self.file_handler.handle_clipboard_files(
-                        file_urls, 
-                        self.last_content_hash,
-                        self.broadcast_encrypted_data
-                    )
-                    self.last_update_time = time.time()
+            # 通过 FileHandler 获取剪贴板文件列表
+            file_urls = self.file_handler.get_clipboard_files()
+            if file_urls:
+                self.last_content_hash = await self.file_handler.handle_clipboard_files(
+                    file_urls, 
+                    self.last_content_hash,
+                    self.broadcast_encrypted_data
+                )
+                self.last_update_time = time.time()
 
-            if AppKit.NSPasteboardTypePNG in types:
-                print("⚠️ 图片加密暂不支持")
-
+            # 图片等其它类型可后续扩展
         except Exception as e:
             print(f"❌ 加密错误: {e}")
 

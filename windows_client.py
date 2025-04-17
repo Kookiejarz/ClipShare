@@ -214,37 +214,6 @@ class WindowsClipboardClient:
             print(f"❌ 身份验证过程出错: {e}")
             return False
 
-    def _get_clipboard_file_paths(self):
-        try:
-            win32clipboard.OpenClipboard()
-            try:
-                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
-                    file_paths = win32clipboard.GetClipboardData(win32con.CF_HDROP)
-                    if file_paths:
-                        paths = list(file_paths)
-                        paths_hash = hashlib.md5(str(paths).encode()).hexdigest()
-                        if hasattr(self, '_last_paths_hash') and self._last_paths_hash == paths_hash:
-                            return [str(path) for path in paths]
-                        self._last_paths_hash = paths_hash
-                        print(f"📎 剪贴板中包含 {len(paths)} 个文件")
-                        return [str(path) for path in paths]
-            # 不再每次都打印剪贴板格式和“没有文件格式数据”
-            finally:
-                win32clipboard.CloseClipboard()
-        except Exception:
-            pass
-        try:
-            text = pyperclip.paste()
-            if text and (':\\' in text or text.strip().startswith('/')):
-                lines = [line.strip() for line in text.split('\n') if line.strip()]
-                valid_paths = [str(Path(line)) for line in lines if Path(line).exists()]
-                if valid_paths:
-                    print(f"📎 从剪贴板文本解析到 {len(valid_paths)} 个文件路径")
-                    return valid_paths
-        except Exception:
-            pass
-        return None
-
     async def send_clipboard_changes(self, websocket):
         last_send_attempt = 0
         min_interval = 0.5
@@ -265,14 +234,14 @@ class WindowsClipboardClient:
                 if current_time - last_send_attempt < min_interval:
                     await asyncio.sleep(0.1)
                     continue
-                file_paths = self._get_clipboard_file_paths()
+
+                # 统一通过 FileHandler 获取文件列表
+                file_paths = self.file_handler.get_clipboard_files()
                 if file_paths:
                     content_hash = hashlib.md5(str(file_paths).encode()).hexdigest()
                     if content_hash == self.last_remote_hash:
-                        # 跳过刚收到的远程文件
                         await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                         continue
-                    # ...原有文件同步逻辑...
                     file_msg = ClipMessage.file_message(file_paths)
                     message_json = ClipMessage.serialize(file_msg)
                     if content_hash != self.last_content_hash:
@@ -285,11 +254,11 @@ class WindowsClipboardClient:
                         self.last_content_hash = content_hash
                         self.last_update_time = current_time
                 else:
-                    current_content = pyperclip.paste()
+                    # 统一通过 FileHandler 获取文本
+                    current_content = self.file_handler.get_clipboard_text()
                     if current_content:
                         content_hash = hashlib.md5(current_content.encode()).hexdigest()
                         if content_hash == self.last_remote_hash:
-                            # 跳过刚收到的远程文本
                             await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                             continue
                         if (content_hash != self.last_content_hash or 
@@ -405,11 +374,12 @@ class WindowsClipboardClient:
             content_hash = hashlib.md5(text.encode()).hexdigest()
             if content_hash == self.last_content_hash:
                 return
-            pyperclip.copy(text)
+            # 统一通过 FileHandler 设置剪贴板文本
+            self.file_handler.set_clipboard_text(text)
             self.last_content_hash = content_hash
-            self.last_remote_hash = content_hash  # 记录远程hash
+            self.last_remote_hash = content_hash
             self.last_update_time = time.time()
-            self.ignore_clipboard_until = time.time() + 2.0  # 冷却2秒
+            self.ignore_clipboard_until = time.time() + 2.0
             max_display = 50
             display_text = text[:max_display] + ("..." if len(text) > max_display else "")
             print(f"📥 已复制文本: \"{display_text}\"")
@@ -421,24 +391,21 @@ class WindowsClipboardClient:
     async def _handle_file_response(self, message):
         try:
             filename = message.get("filename")
-            chunk_data = base64.b64decode(message.get("chunk_data", ""))
-            if not filename or not chunk_data:
+            # chunk_data = base64.b64decode(message.get("chunk_data", ""))
+            if not filename:
                 return
             is_complete = self.file_handler.handle_received_chunk(message)
             if is_complete:
                 file_path = self.file_handler.file_transfers[filename]["path"]
                 print(f"✅ 文件接收完成: {file_path}")
                 try:
-                    win32clipboard.OpenClipboard()
-                    win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardData(win32con.CF_HDROP, tuple([str(file_path)]))
-                    win32clipboard.CloseClipboard()
+                    # 统一通过 FileHandler 设置剪贴板文件
+                    self.file_handler.set_clipboard_file(file_path)
                     print(f"📎 已将文件添加到剪贴板: {filename}")
                     self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
                     self.last_update_time = time.time()
                 except Exception as e:
                     print(f"❌ 设置剪贴板文件失败: {e}")
-                    pyperclip.copy(str(file_path))
         except Exception as e:
             print(f"❌ 处理文件响应失败: {e}")
         finally:
