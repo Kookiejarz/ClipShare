@@ -630,3 +630,29 @@ class FileHandler:
         else:
             print("⚠️ 当前平台不支持剪贴板文件获取")
             return []
+
+    def set_clipboard_text(self, text: str):
+        """设置剪贴板文本内容（支持Mac和Windows）"""
+        if IS_MACOS:
+            pasteboard = AppKit.NSPasteboard.generalPasteboard()
+            pasteboard.clearContents()
+            nsstring = AppKit.NSString.stringWithString_(text)
+            pasteboard.setString_forType_(nsstring, AppKit.NSStringPboardType)
+            print("📋 已设置Mac剪贴板文本")
+            return True
+        elif IS_WINDOWS:
+            try:
+                import win32clipboard
+                import win32con
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+                win32clipboard.CloseClipboard()
+                print("📋 已设置Windows剪贴板文本")
+                return True
+            except Exception as e:
+                print(f"❌ 设置Windows剪贴板文本失败: {e}")
+                return False
+        else:
+            print("⚠️ 当前平台不支持设置剪贴板文本")
+            return False
