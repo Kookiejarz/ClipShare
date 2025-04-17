@@ -156,6 +156,9 @@ class WindowsClipboardClient:
         print("🔄 重新搜索剪贴板服务...")
 
     async def connect_and_sync(self):
+        # Use locals to track task creation for cancellation in except blocks
+        send_task = None
+        receive_task = None
         async with websockets.connect(self.ws_url, subprotocols=["binary"]) as websocket:
             try:
                 if not await self.authenticate(websocket):
@@ -163,35 +166,79 @@ class WindowsClipboardClient:
                 if not await self.perform_key_exchange(websocket):
                     print("❌ 密钥交换失败，断开连接")
                     return
+
                 self.reconnect_delay = 3
                 self.connection_status = ConnectionStatus.CONNECTED
                 print("✅ 连接和密钥交换成功，开始同步剪贴板")
-                send_task = asyncio.create_task(self.send_clipboard_changes(websocket))
-                receive_task = asyncio.create_task(self.receive_clipboard_changes(websocket))
-                try:
-                    while self.running and self.connection_status == ConnectionStatus.CONNECTED:
-                        await asyncio.sleep(0.5)
-                        if not send_task.done() and not receive_task.done():
-                            continue
-                        break
-                    if not send_task.done():
-                        send_task.cancel()
-                    if not receive_task.done():
-                        receive_task.cancel()
-                    await asyncio.gather(send_task, receive_task, return_exceptions=True)
-                except asyncio.CancelledError:
-                    if not send_task.done():
-                        send_task.cancel()
-                    if not receive_task.done():
-                        receive_task.cancel()
-                    raise
+
+                send_task = asyncio.create_task(self.send_clipboard_changes(websocket), name="SendTask")
+                receive_task = asyncio.create_task(self.receive_clipboard_changes(websocket), name="ReceiveTask")
+                print("DEBUG: Send/Receive tasks created in connect_and_sync")
+
+                # Wait for either task to complete (normally or with error)
+                done, pending = await asyncio.wait(
+                    [send_task, receive_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                print(f"DEBUG: asyncio.wait completed. One task finished. Done: {len(done)}, Pending: {len(pending)}")
+
+                # Cancel the pending task(s)
+                for task in pending:
+                    print(f"DEBUG: Cancelling pending task: {task.get_name()}")
+                    task.cancel()
+                # Await cancellation if there were pending tasks
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    print("DEBUG: Pending tasks cancelled.")
+
+                # Check the result of the completed task(s) for errors
+                for task in done:
+                    try:
+                        task.result() # This will raise an exception if the task failed
+                        print(f"DEBUG: Task {task.get_name()} completed normally.")
+                    except asyncio.CancelledError:
+                        print(f"DEBUG: Task {task.get_name()} was cancelled.")
+                    except Exception as e:
+                        print(f"❌ Task {task.get_name()} failed with exception: {e}")
+                        # Consider if this should trigger disconnect or be handled differently
+
             except websockets.exceptions.ConnectionClosed as e:
                 print(f"📴 与服务器的连接已关闭: {e}")
                 self.connection_status = ConnectionStatus.DISCONNECTED
-            except Exception as e:
-                print(f"❌ 连接过程中出错: {e}")
+            except asyncio.CancelledError:
+                print("DEBUG: connect_and_sync task was cancelled.")
                 self.connection_status = ConnectionStatus.DISCONNECTED
-                raise
+                # Ensure tasks are cancelled if connect_and_sync itself is cancelled
+                if send_task and not send_task.done(): send_task.cancel()
+                if receive_task and not receive_task.done(): receive_task.cancel()
+                if send_task and receive_task:
+                     await asyncio.gather(send_task, receive_task, return_exceptions=True)
+                # Do not re-raise CancelledError here, let sync_clipboard handle it if needed
+            except Exception as e:
+                print(f"❌ 连接过程中发生意外错误: {e}")
+                import traceback
+                traceback.print_exc() # Print stack trace for unexpected errors
+                self.connection_status = ConnectionStatus.DISCONNECTED
+            finally:
+                # Ensure tasks are cancelled if they haven't been already when exiting the try block
+                print("DEBUG: Entering finally block in connect_and_sync")
+                if send_task and not send_task.done():
+                    print(f"DEBUG: Final cancellation check: Cancelling {send_task.get_name()}")
+                    send_task.cancel()
+                if receive_task and not receive_task.done():
+                    print(f"DEBUG: Final cancellation check: Cancelling {receive_task.get_name()}")
+                    receive_task.cancel()
+                # Await final cancellations
+                tasks_to_await = []
+                if send_task: tasks_to_await.append(send_task)
+                if receive_task: tasks_to_await.append(receive_task)
+                if tasks_to_await:
+                    await asyncio.gather(*tasks_to_await, return_exceptions=True)
+                    print("DEBUG: Final task cleanup complete.")
+
+        # This print executes after the 'async with' block finishes (connection closed)
+        print(f"DEBUG: connect_and_sync finished. Status is now: {self.connection_status}")
 
     async def authenticate(self, websocket):
         try:
