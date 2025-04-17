@@ -7,8 +7,10 @@ import hashlib
 class MessageType:
     TEXT = "text"
     FILE = "file"
-    FILE_REQUEST = "file_request"  # 请求文件
-    FILE_RESPONSE = "file_response"  # 文件内容响应
+    FILE_START = "file_start"
+    FILE_CHUNK = "file_chunk"
+    FILE_RESPONSE = "file_response"
+    FILE_REQUEST = "file_request"  # 添加此行
 
 class ClipMessage:
     """剪贴板消息格式化工具"""
