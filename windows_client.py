@@ -363,33 +363,54 @@ class WindowsClipboardClient:
                 await websocket.send(data)
             except Exception as e:
                 print(f"❌ 发送数据失败: {e}")
-        print("DEBUG: receive_clipboard_changes task started.") # Add this line
+        print("DEBUG: receive_clipboard_changes task started.") # Existing debug print
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
-            print("DEBUG: receive_clipboard_changes loop iteration.") # Add this line
+            # print("DEBUG: receive_clipboard_changes loop iteration.") # Keep this commented for now to reduce noise unless needed
             try:
+                # print("DEBUG: receive_clipboard_changes trying to recv...") # Keep commented unless needed
                 received_data = await websocket.recv()
-                self.is_receiving = True
+                # print(f"DEBUG: receive_clipboard_changes received {len(received_data)} bytes.") # Keep commented unless needed
+
+                self.is_receiving = True # Set flag only after successful receive
                 decrypted_data = self.security_mgr.decrypt_message(received_data)
                 message_json = decrypted_data.decode('utf-8')
                 message = ClipMessage.deserialize(message_json)
+
                 if message["type"] == MessageType.TEXT:
                     await self._handle_text_message(message)
                 elif message["type"] == MessageType.FILE:
                     await self.file_handler.handle_received_files(message, websocket, broadcast_fn)
                 elif message["type"] == MessageType.FILE_RESPONSE:
                     await self._handle_file_response(message)
+                # Note: is_receiving is reset within the _handle_* methods upon completion/error
+
+            # --- Explicitly catch websocket closure exceptions ---
+            except websockets.exceptions.ConnectionClosedOK:
+                print("DEBUG: receive_clipboard_changes: Connection closed normally by server.")
+                self.connection_status = ConnectionStatus.DISCONNECTED # Ensure status update
+                break # Exit the loop
+            except websockets.exceptions.ConnectionClosedError as e:
+                print(f"DEBUG: receive_clipboard_changes: Connection closed with error: {e}")
+                self.connection_status = ConnectionStatus.DISCONNECTED # Ensure status update
+                break # Exit the loop
+            # --- End explicit closure handling ---
+
             except asyncio.CancelledError:
-                print("DEBUG: receive_clipboard_changes cancelled.") # Add this line
+                print("DEBUG: receive_clipboard_changes cancelled.") # Existing debug print
                 break
             except Exception as e:
-                if self.running and self.connection_status == ConnectionStatus.CONNECTED:
-                    print(f"❌ 接收错误: {e}")
-                    if "connection" in str(e).lower():
-                        self.connection_status = ConnectionStatus.DISCONNECTED
-                        break
-                self.is_receiving = False
-                await asyncio.sleep(1)
-        print("DEBUG: receive_clipboard_changes task finished.") # Add this line
+                # Catch other potential errors during receive/decrypt/process
+                print(f"❌ receive_clipboard_changes error in loop: {e}") # Modify existing print
+                import traceback
+                traceback.print_exc() # Add traceback for unexpected errors
+                # Decide if connection should be considered broken
+                if "connection" in str(e).lower() or isinstance(e, websockets.exceptions.WebSocketException):
+                    self.connection_status = ConnectionStatus.DISCONNECTED
+                    break
+                self.is_receiving = False # Reset flag on non-connection errors
+                await asyncio.sleep(1) # Avoid tight loop on non-connection errors
+
+        print("DEBUG: receive_clipboard_changes task finished.") # Existing debug print
 
     async def perform_key_exchange(self, websocket):
         try:
