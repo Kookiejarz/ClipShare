@@ -31,28 +31,41 @@ class ConnectionStatus:
 
 class WindowsClipboardClient:
     def __init__(self):
-        self.security_mgr = SecurityManager()
-        self.discovery = DeviceDiscovery()
-        self.ws_url = None
-        self.is_receiving = False
-        self.device_id = self._get_device_id()
-        self.device_token = self._load_device_token()
-        self.running = True
-        self.connection_status = ConnectionStatus.DISCONNECTED
-        self.reconnect_delay = 3
-        self.max_reconnect_delay = 30
-        self.last_discovery_time = 0
-        self.last_content_hash = None
-        self.last_update_time = 0
-        self.last_format_log = set()
-        self.file_handler = FileHandler(
-            Path(tempfile.gettempdir()) / "clipshare_files",
-            self.security_mgr
-        )
-        self.ignore_clipboard_until = 2
-        self.last_remote_hash = None  # 新增：记录最近收到的远程内容hash
-        self.last_clipboard_text = None
-        self.last_clipboard_files = None
+        print("DEBUG: Initializing WindowsClipboardClient...")
+        try:
+            self.security_mgr = SecurityManager()
+            print("DEBUG: SecurityManager OK")
+            self.discovery = DeviceDiscovery()
+            print("DEBUG: DeviceDiscovery OK")
+            self.ws_url = None
+            self.is_receiving = False
+            self.device_id = self._get_device_id()
+            print(f"DEBUG: Device ID: {self.device_id}")
+            self.device_token = self._load_device_token()
+            print(f"DEBUG: Device Token Loaded: {'Yes' if self.device_token else 'No'}")
+            self.running = True
+            self.connection_status = ConnectionStatus.DISCONNECTED
+            self.reconnect_delay = 3
+            self.max_reconnect_delay = 30
+            self.last_discovery_time = 0
+            self.last_content_hash = None
+            self.last_update_time = 0
+            self.last_format_log = set()
+            self.file_handler = FileHandler(
+                Path(tempfile.gettempdir()) / "clipshare_files",
+                self.security_mgr
+            )
+            print("DEBUG: FileHandler OK")
+            self.ignore_clipboard_until = 2
+            self.last_remote_hash = None
+            self.last_clipboard_text = None
+            self.last_clipboard_files = None
+            print("DEBUG: Initialization complete.")
+        except Exception as e:
+            print(f"FATAL ERROR during __init__: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def _get_device_id(self):
         import socket, uuid
@@ -73,7 +86,7 @@ class WindowsClipboardClient:
 
     def _load_device_token(self):
         token_path = self._get_token_path()
-        if token_path.exists():
+        if (token_path.exists()):
             with open(token_path, "r") as f:
                 return f.read().strip()
         return None
@@ -357,7 +370,7 @@ class WindowsClipboardClient:
             "/tmp/clipshare_files/",
             "C:\\Users\\\\AppData\\Local\\Temp\\clipshare_files\\"
         ]
-        for indicator in temp_indicators:
+        for indicator in text:
             if indicator in text:
                 print(f"⏭️ 跳过临时文件路径: \"{text[:40]}...\"")
                 return True
@@ -481,28 +494,39 @@ class WindowsClipboardClient:
                 break
 
 def main():
+    print("DEBUG: Starting main function...")
     client = WindowsClipboardClient()
+    print("DEBUG: Client object created.")
     try:
         print("🚀 ClipShare Windows 客户端已启动")
         print("📋 按 Ctrl+C 退出程序")
         async def run_client():
+            print("DEBUG: Starting run_client async function...")
             status_task = asyncio.create_task(client.show_connection_status())
             sync_task = asyncio.create_task(client.sync_clipboard())
+            print("DEBUG: Async tasks created.")
             try:
                 await asyncio.gather(sync_task, status_task)
             except asyncio.CancelledError:
+                print("DEBUG: Main tasks cancelled.")
                 if not status_task.done():
                     status_task.cancel()
                 if not sync_task.done():
                     sync_task.cancel()
                 await asyncio.gather(status_task, sync_task, return_exceptions=True)
+        print("DEBUG: Running asyncio loop...")
         asyncio.run(run_client())
     except KeyboardInterrupt:
         print("\n👋 正在关闭 ClipShare...")
     except Exception as e:
         print(f"\n❌ 发生错误: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
+        print("DEBUG: Entering finally block...")
         client.stop()
+        print("DEBUG: main function finished.")
 
 if __name__ == "__main__":
+    print("DEBUG: Script execution started.")
     main()

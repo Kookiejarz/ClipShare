@@ -218,6 +218,7 @@ class ClipboardListener:
                         # 新增：同步last_content_hash，防止回环
                         self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
                         self.last_update_time = time.time()
+                        self.ignore_clipboard_until = time.time() + 2.0 # Add ignore window
                     
         except Exception as e:
             print(f"❌ 接收数据处理错误: {e}")
