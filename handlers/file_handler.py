@@ -423,6 +423,23 @@ class FileHandler:
             return path
         return None
 
+    @staticmethod
+    def get_files_content_hash(file_paths):
+        """计算多个文件内容的MD5哈希值"""
+        md5 = hashlib.md5()
+        for path in file_paths:
+            try:
+                with open(path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        md5.update(chunk)
+            except Exception as e:
+                print(f"❌ 计算文件哈希失败: {path} - {e}")
+                return None
+        return md5.hexdigest()
+
     async def handle_received_files(self, message, sender_websocket, broadcast_fn):
         """处理收到的文件信息"""
         files = message["files"]
