@@ -177,10 +177,12 @@ class WindowsClipboardClient:
         self.discovery.start_discovery(self.on_service_found)
 
         while self.running:
+            # Log loop start state
+            print(f"DEBUG: Main loop - Status: {self.connection_status}, URL: {self.ws_url}")
             try:
                 if self.connection_status == ConnectionStatus.DISCONNECTED:
                     if not self.ws_url:
-                        # print("⏳ 等待发现剪贴板服务...") # Less verbose
+                        # print("DEBUG: No URL, waiting for discovery...") # Optional more verbose log
                         await asyncio.sleep(1.0) # Longer sleep when waiting for discovery
                         continue
 
@@ -200,24 +202,24 @@ class WindowsClipboardClient:
                         await asyncio.sleep(1) # Brief pause before rediscovery
 
                     except asyncio.TimeoutError:
-                         # This exception should now only be raised by timeouts *within*
-                         # connect_and_sync (e.g., during initial connect, auth, key exchange)
-                         # or potentially if the websocket.connect itself times out (though less likely).
-                         # The main recv/ping timeouts are handled inside receive_clipboard_changes.
+                         # ... existing code ...
                          print(f"❌ 连接或初始握手超时: {self.ws_url}")
                          self.connection_status = ConnectionStatus.DISCONNECTED
                          self.ws_url = None # Reset URL
+                         print("DEBUG: Triggering wait_for_reconnect due to TimeoutError.") # Add log
                          await self.wait_for_reconnect()
                     except websockets.exceptions.InvalidURI:
                          print(f"❌ 无效的服务地址: {self.ws_url}")
                          self.connection_status = ConnectionStatus.DISCONNECTED
                          self.ws_url = None
+                         # No reconnect wait here, just sleep and retry discovery
                          await asyncio.sleep(2) # Wait before rediscovery
                     except websockets.exceptions.WebSocketException as e:
                          # Catches connection failures (e.g., ConnectionRefusedError)
                          print(f"❌ WebSocket 连接错误: {e}")
                          self.connection_status = ConnectionStatus.DISCONNECTED
                          self.ws_url = None
+                         print(f"DEBUG: Triggering wait_for_reconnect due to WebSocketException: {e}") # Add log
                          await self.wait_for_reconnect()
                     except Exception as e:
                         # Catch other unexpected errors during the connection attempt/management phase
@@ -225,6 +227,7 @@ class WindowsClipboardClient:
                         traceback.print_exc()
                         self.connection_status = ConnectionStatus.DISCONNECTED
                         self.ws_url = None
+                        print(f"DEBUG: Triggering wait_for_reconnect due to Exception: {e}") # Add log
                         await self.wait_for_reconnect()
                 else:
                     # Still connected or connecting, short sleep
@@ -392,7 +395,7 @@ class WindowsClipboardClient:
         try:
             win32clipboard.OpenClipboard()
             try:
-                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
+                if (win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP)):
                     data = win32clipboard.GetClipboardData(win32con.CF_HDROP)
                     if data:
                         # Data is a tuple of file paths
@@ -703,7 +706,7 @@ class WindowsClipboardClient:
         # ... existing code ...
         last_status = None
         status_messages = {
-            ConnectionStatus.DISCONNECTED: "🔴 已断开连接 - 等待服务器",
+            ConnectionStatus.DISconnected: "🔴 已断开连接 - 等待服务器",
             ConnectionStatus.CONNECTING: "🟡 正在连接...",
             ConnectionStatus.CONNECTED: "🟢 已连接 - 剪贴板同步已激活"
         }
