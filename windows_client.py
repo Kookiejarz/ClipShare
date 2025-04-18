@@ -15,6 +15,12 @@ from utils.message_format import ClipMessage, MessageType
 from handlers.file_handler import FileHandler
 from utils.platform_config import verify_platform, IS_WINDOWS
 from config import ClipboardConfig
+<<<<<<< HEAD
+=======
+from handlers.file_handler import FileHandler
+from utils.platform_config import verify_platform, IS_WINDOWS
+from config import ClipboardConfig
+>>>>>>> dev
 import tempfile
 import traceback # Import traceback
 
@@ -288,7 +294,11 @@ class WindowsClipboardClient:
         async with websockets.connect(
             self.ws_url,
             subprotocols=["binary"],
+<<<<<<< HEAD
             max_size=10 * 1024 * 1024, # Allow larger messages (e.g., 10MB) for file chunks
+=======
+            max_size= 10 * 1024 * 1024, # Allow larger messages (e.g., 10MB) for file chunks
+>>>>>>> dev
             ping_interval=20,
             ping_timeout=20
         ) as websocket:
@@ -423,6 +433,7 @@ class WindowsClipboardClient:
                 #     pass
             finally:
                 win32clipboard.CloseClipboard()
+                
         except Exception as e:
             # Handle specific pywintypes.error if needed
             if "OpenClipboard" in str(e) or "GetClipboardData" in str(e):

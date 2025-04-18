@@ -24,21 +24,21 @@ if IS_MACOS:
                 url = AppKit.NSURL.fileURLWithPath_(path_str)
                 if not url:
                     print(f"❌ [MainThread] 无法创建文件URL: {path_str}")
-                    return (False, -1) # Return tuple (success, change_count)
+                    return "0|-1"
                 urls = AppKit.NSArray.arrayWithObject_(url)
                 success = pasteboard.writeObjects_(urls)
                 if success:
                     change_count = pasteboard.changeCount()
                     print(f"📎 [MainThread] 已将文件添加到Mac剪贴板: {Path(path_str).name}")
-                    return (True, change_count)
+                    return f"1|{change_count}"
                 else:
                     print(f"❌ [MainThread] 添加文件到Mac剪贴板失败: {Path(path_str).name}")
-                    return (False, -1)
+                    return "0|-1"
             except Exception as e:
                 print(f"❌ [MainThread] 设置剪贴板文件时出错: {e}")
                 import traceback
                 traceback.print_exc()
-                return (False, -1)
+                return "0|-1"
 
 
 class FileHandler:
@@ -395,17 +395,27 @@ class FileHandler:
         try:
             path_str = str(file_path)
             if IS_MACOS:
-                # Perform pasteboard operation on the main thread
-                # Add the third argument: waitUntilDone=True
+                objc.registerMetaDataForSelector(
+                    b'PasteboardSetter', b'setFileURL_', {'retval': {'type': b'@'}}
+                )
                 result = PasteboardSetter.performSelectorOnMainThread_withObject_waitUntilDone_(
                     'setFileURL:', path_str, True
                 )
-                success, change_count = result # Unpack the tuple returned from main thread
-
+                if result is None:
+                    # print("⚠️ 主线程剪贴板操作未返回结果，可能未正确注册 PasteboardSetter 或方法未被调用。")
+                    return None
+                # 解析 result
+                try:
+                    success_str, change_count_str = result.split("|")
+                    success = success_str == "1"
+                    change_count = int(change_count_str)
+                except Exception as e:
+                    print(f"⚠️ 解析主线程返回值失败: {result} ({e})")
+                    return None
                 if success:
-                    return change_count # Return change count for state tracking
+                    return change_count
                 else:
-                    return None # Indicate failure
+                    return None
 
             elif IS_WINDOWS:
                 # Windows specific logic will be called from windows_client.py

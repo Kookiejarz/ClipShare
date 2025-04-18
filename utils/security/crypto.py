@@ -47,6 +47,7 @@ class SecurityManager:
             print(f"公钥反序列化失败: {e}")
             raise
 
+
     def generate_shared_key(self, peer_public_key):
         """Generate shared key using ECDH"""
         if not self.private_key:
