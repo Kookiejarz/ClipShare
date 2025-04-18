@@ -61,7 +61,7 @@ python windows_client.py
 UniPaste uses multi-layered encryption technology to ensure data security:
 
 - **Elliptic Curve Diffie-Hellman (ECDHE)**: Securely negotiate shared keys without pre-shared secrets
-- **HKDF Key Derivation**: Securely derive encryption keys from shared secrets, increasing key entropy
+- **HKDF Key Derivation**: Securely derive encryption keys from shared secrets
 - **AES-256-GCM**: Advanced Encryption Standard with Galois/Counter Mode for data confidentiality and integrity
 
 ## 🛠 Local Development Environment
@@ -70,7 +70,6 @@ UniPaste uses multi-layered encryption technology to ensure data security:
 git clone https://github.com/Kookiejarz/UniPaste.git
 cd UniPaste
 pip install -r requirements.txt
-python -m pytest tests/  # Run tests
 ```
 
 ## ⚠️ Security Considerations
