@@ -224,6 +224,8 @@ class ClipboardListener:
                         file_path = self.file_handler.file_transfers[filename]["path"]
                         self.file_handler.set_clipboard_file(file_path)
                         print(f"✅ 文件已添加到剪贴板: {filename}")
+                        # 新增：设置忽略窗口，防止回环
+                        self.ignore_clipboard_until = time.time() + 2.0
                     
         except Exception as e:
             print(f"❌ 接收数据处理错误: {e}")
@@ -303,6 +305,11 @@ class ClipboardListener:
                 time_since_update = current_time - self.last_update_time
                 time_since_process = current_time - last_processed_time
                 
+                # 新增：忽略窗口
+                if hasattr(self, "ignore_clipboard_until") and current_time < self.ignore_clipboard_until:
+                    await asyncio.sleep(0.3)
+                    continue
+            
                 # 三重防护: 1) 确保不是接收状态 2) 确保与上次更新间隔充足 3) 确保处理频率不会太高
                 if (not self.is_receiving and 
                     time_since_update > 1.0 and  # 墛大阈值
