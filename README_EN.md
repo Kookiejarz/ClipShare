@@ -74,7 +74,7 @@ python -m pytest tests/  # Run tests
 
 ## ⚠️ Security Considerations
 
-- This tool is designed for use on secure local networks only
+- This tool is designed for use on secure networks only
 - Not recommended for use on public or untrusted networks, which may lead to data leakage
 - Check GitHub page regularly for security updates
 - Only use between trusted devices
