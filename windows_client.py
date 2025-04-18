@@ -675,6 +675,7 @@ class WindowsClipboardClient:
             pyperclip.copy(text)
             self.last_content_hash = content_hash
             self.last_update_time = time.time()
+            self.ignore_clipboard_until = time.time() + 2.0
             
             # 显示收到的文本(限制长度)
             max_display = 50
