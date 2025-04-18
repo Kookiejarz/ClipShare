@@ -869,23 +869,32 @@ class WindowsClipboardClient:
     # Removed get_files_content_hash (moved to FileHandler)
 
 
-def main():
+async def main(): # Make main async
     client = WindowsClipboardClient()
     main_task = None
     status_task = None
 
+    # This inner async function might not be strictly necessary anymore,
+    # but we can keep it for structure or integrate its logic directly.
     async def run_client():
         nonlocal status_task # Allow modification
+        # Create status task within the running loop
         status_task = asyncio.create_task(client.show_connection_status())
-        await client.sync_clipboard() # Run main sync loop
+        try:
+            await client.sync_clipboard() # Run main sync loop
+        finally:
+            # Ensure status task is cancelled if sync_clipboard finishes/errors
+            if status_task and not status_task.done():
+                status_task.cancel()
 
     try:
         print("🚀 UniPaste Windows 客户端已启动")
         print(f"📂 临时文件目录: {client.file_handler.temp_dir}")
         print("📋 按 Ctrl+C 退出程序")
 
+        # Run the client logic directly
         main_task = asyncio.create_task(run_client())
-        asyncio.get_event_loop().run_until_complete(main_task)
+        await main_task # Wait for the main client task to complete
 
     except KeyboardInterrupt:
         print("\n👋 检测到 Ctrl+C，正在关闭...")
@@ -896,31 +905,17 @@ def main():
         traceback.print_exc()
     finally:
         print("⏳ 正在清理资源...")
-        # Initiate stop sequence
+        # Initiate stop sequence (ensure client.stop() is called)
         client.stop()
 
-        # Cancel tasks if they are still running
-        if status_task and not status_task.done():
-            status_task.cancel()
-        if main_task and not main_task.done():
-             main_task.cancel() # Should already be finishing or cancelled
+        # Cancel tasks if they are still running (main_task should be done or cancelled)
+        tasks_to_cancel = [t for t in [status_task, main_task] if t and not t.done()]
+        if tasks_to_cancel:
+            for task in tasks_to_cancel:
+                task.cancel()
+            # Wait briefly for tasks to cancel
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
 
-        # Allow some time for tasks to clean up
-        # Gather cancelled tasks to prevent warnings
-        async def final_gather():
-             tasks_to_gather = [t for t in [status_task, main_task] if t]
-             if tasks_to_gather:
-                  await asyncio.gather(*tasks_to_gather, return_exceptions=True)
-
-        try:
-             asyncio.get_event_loop().run_until_complete(asyncio.wait_for(final_gather(), timeout=2.0))
-        except asyncio.TimeoutError:
-             print("⚠️ 清理任务超时")
-        except RuntimeError as e:
-             if "Event loop is closed" in str(e):
-                  pass # Loop might already be closed after run_until_complete
-             else:
-                  raise
         print("🚪 程序退出")
 
 
@@ -928,4 +923,11 @@ if __name__ == "__main__":
     # Set event loop policy for Windows if needed (usually not required for basic asyncio)
     # if sys.platform == 'win32':
     #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    main()
+    try:
+        asyncio.run(main()) # Use asyncio.run()
+    except RuntimeError as e:
+         # Catch potential loop-related errors during shutdown
+         if "Event loop is closed" in str(e):
+              print("ℹ️ Event loop closed.")
+         else:
+              raise
