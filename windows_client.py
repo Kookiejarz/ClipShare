@@ -815,16 +815,15 @@ class WindowsClipboardClient:
                    finally:
                         # pythoncom.CoUninitialize() # Careful with uninit if used elsewhere
 
-              # --- Final Fallback: Set as text ---
-              print("ℹ️ 回退：将文件路径作为文本复制到剪贴板。")
-              try:
-                   pyperclip.copy(path_str)
-                   print(f"📎 已将文件路径作为文本复制到剪贴板: {file_path.name}")
-                   # Return True even for text fallback, as *something* was set
-                   return True
-              except Exception as text_err:
-                   print(f"❌ 将文件路径作为文本复制也失败了: {text_err}")
-                   return False # All methods failed
+                # --- Final Fallback: Set as text ---
+                    try:
+                        pyperclip.copy(path_str)
+                        print(f"📎 已将文件路径作为文本复制到剪贴板: {file_path.name}")
+                        # Return True even for text fallback, as *something* was set
+                        return True
+                    except Exception as text_err:
+                        print(f"❌ 将文件路径作为文本复制也失败了: {text_err}")
+                        return False # All methods failed
 
          return False # Should not be reached unless initial try fails weirdly
 
