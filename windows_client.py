@@ -200,7 +200,7 @@ class WindowsClipboardClient:
                         # self.connection_status = ConnectionStatus.DISCONNECTED
                         self.ws_url = None # Reset URL to trigger rediscovery
                         print("DEBUG: Restarting discovery after normal close.") # Add log
-                        self.discovery.close() # Stop previous discovery
+                        self.discovery.stop_browser() # Stop browser, don't close zeroconf yet
                         self.discovery.start_discovery(self.on_service_found) # Start new discovery
                         await asyncio.sleep(1) # Brief pause before rediscovery
 
@@ -209,17 +209,17 @@ class WindowsClipboardClient:
                          print(f"❌ 连接或初始握手超时: {self.ws_url}")
                          self.connection_status = ConnectionStatus.DISCONNECTED
                          self.ws_url = None # Reset URL
-                         print("DEBUG: Closing discovery before wait_for_reconnect (TimeoutError).") # Add log
-                         self.discovery.close() # Stop discovery before waiting
+                         print("DEBUG: Stopping browser before wait_for_reconnect (TimeoutError).") # Add log
+                         self.discovery.stop_browser() # Stop browser before waiting
                          print("DEBUG: Triggering wait_for_reconnect due to TimeoutError.") # Add log
-                         await self.wait_for_reconnect()
+                         await self.wait_for_reconnect() # wait_for_reconnect will restart discovery
                     except websockets.exceptions.InvalidURI:
                          print(f"❌ 无效的服务地址: {self.ws_url}")
                          self.connection_status = ConnectionStatus.DISCONNECTED
                          self.ws_url = None
                          # No reconnect wait here, just sleep and retry discovery
                          print("DEBUG: Restarting discovery after InvalidURI.") # Add log
-                         self.discovery.close() # Stop previous discovery
+                         self.discovery.stop_browser() # Stop browser
                          self.discovery.start_discovery(self.on_service_found) # Start new discovery
                          await asyncio.sleep(2) # Wait before rediscovery
                     except websockets.exceptions.WebSocketException as e:
@@ -227,20 +227,20 @@ class WindowsClipboardClient:
                          print(f"❌ WebSocket 连接错误: {e}")
                          self.connection_status = ConnectionStatus.DISCONNECTED
                          self.ws_url = None
-                         print(f"DEBUG: Closing discovery before wait_for_reconnect (WebSocketException: {e})") # Add log
-                         self.discovery.close() # Stop discovery before waiting
+                         print(f"DEBUG: Stopping browser before wait_for_reconnect (WebSocketException: {e})") # Add log
+                         self.discovery.stop_browser() # Stop browser before waiting
                          print(f"DEBUG: Triggering wait_for_reconnect due to WebSocketException: {e}") # Add log
-                         await self.wait_for_reconnect()
+                         await self.wait_for_reconnect() # wait_for_reconnect will restart discovery
                     except Exception as e:
                         # Catch other unexpected errors during the connection attempt/management phase
                         print(f"❌ 连接或同步时发生意外错误: {e}")
                         traceback.print_exc()
                         self.connection_status = ConnectionStatus.DISCONNECTED
                         self.ws_url = None
-                        print(f"DEBUG: Closing discovery before wait_for_reconnect (Exception: {e})") # Add log
-                        self.discovery.close() # Stop discovery before waiting
+                        print(f"DEBUG: Stopping browser before wait_for_reconnect (Exception: {e})") # Add log
+                        self.discovery.stop_browser() # Stop browser before waiting
                         print(f"DEBUG: Triggering wait_for_reconnect due to Exception: {e}") # Add log
-                        await self.wait_for_reconnect()
+                        await self.wait_for_reconnect() # wait_for_reconnect will restart discovery
                 else:
                     # Still connected or connecting, short sleep
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
@@ -278,7 +278,7 @@ class WindowsClipboardClient:
              # Reset URL to force rediscovery if needed
              self.ws_url = None
              print("🔄 重新搜索剪贴板服务...")
-             # Explicitly restart discovery here
+             # Explicitly restart discovery here (start_discovery now handles stopping previous browser)
              self.discovery.start_discovery(self.on_service_found)
 
 

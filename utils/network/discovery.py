@@ -29,6 +29,7 @@ class DeviceDiscovery:
         self.service_name = service_name
         self.discovered_devices = {}
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self.browser = None # Initialize browser attribute
 
     async def start_advertising(self, port):
         """Advertise this device on the network."""
@@ -52,12 +53,27 @@ class DeviceDiscovery:
 
     def start_discovery(self, callback):
         """Discover clipboard services on the network."""
+        # Stop any existing browser first
+        self.stop_browser()
+        # Create and start a new browser
         self.browser = ServiceBrowser(
             self.zeroconf, 
             self.service_name,
             ClipboardServiceListener(callback)
         )
         print("🔍 开始搜索剪贴板服务...")
+
+    def stop_browser(self):
+        """Stop the current service browser if it's running."""
+        if self.browser:
+            print("DEBUG: Stopping existing service browser.")
+            try:
+                self.browser.cancel() # Preferred way to stop ServiceBrowser
+                # self.browser.close() # close() might be needed depending on zeroconf version/impl details
+            except Exception as e:
+                 print(f"⚠️ Error stopping service browser: {e}")
+            finally:
+                 self.browser = None
 
     def _get_local_ip(self):
         """Get the local IP address."""
@@ -70,8 +86,13 @@ class DeviceDiscovery:
         return '127.0.0.1'
 
     def close(self):
-        """Clean up resources."""
+        """Clean up resources, including Zeroconf instance."""
+        print("DEBUG: Closing DeviceDiscovery (Zeroconf and Executor).")
+        self.stop_browser() # Ensure browser is stopped
         if hasattr(self, 'zeroconf'):
-            self.zeroconf.close()
+            try:
+                self.zeroconf.close()
+            except Exception as e:
+                 print(f"⚠️ Error closing zeroconf: {e}")
         if hasattr(self, '_executor'):
-            self._executor.shutdown()
+            self._executor.shutdown(wait=False) # Don't wait indefinitely
