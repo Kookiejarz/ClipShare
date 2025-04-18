@@ -299,14 +299,17 @@ class FileHandler:
         # Only return a hash if at least one valid file was processed
         return md5.hexdigest() if valid_paths_found else None
 
-    async def handle_received_files(self, message, send_encrypted_fn, sender_websocket=None):
-        """处理收到的文件信息, 请求文件内容"""
-        files = message.get("files", [])
+    async def handle_received_files(self, file_info_message, send_encrypted_func, sender_websocket=None):
+        """
+        Handles a received FILE message containing file metadata.
+        Checks the cache and requests missing files from the sender.
+        """
+        files = file_info_message.get("files", [])
         if not files:
             print("❌ 收到空的文件列表")
             return False
 
-        file_paths_to_request = []
+        files_to_request = []
         file_names = []
 
         for file_info in files:
@@ -329,19 +332,19 @@ class FileHandler:
             else:
                 if file_hash:
                     print(f"ℹ️ 文件 '{filename}' 不在缓存中或哈希缺失，请求传输。")
-                file_paths_to_request.append(file_path) # Use original path for request
+                files_to_request.append(file_path) # Use original path for request
 
-        if not file_paths_to_request:
+        if not files_to_request:
             print("✅ 所有收到的文件都在缓存中，无需请求。")
             # If all files are cached, potentially update clipboard now?
             # Needs careful consideration if multiple files were sent.
             return True # Indicate success (all cached or no files)
 
         print(f"📥 收到文件信息: {', '.join(file_names[:3])}{' 等' if len(file_names) > 3 else ''}")
-        print(f"📤 请求 {len(file_paths_to_request)} 个文件内容...")
+        print(f"📤 请求 {len(files_to_request)} 个文件内容...")
 
         # Request each missing file
-        for file_path in file_paths_to_request:
+        for file_path in files_to_request:
             filename = Path(file_path).name # Extract filename for logging
             print(f"📤 请求文件: {filename}")
             file_req = ClipMessage.file_request_message(file_path) # Request using original path
@@ -349,10 +352,11 @@ class FileHandler:
 
             # Encrypt and send the request
             # If sender_websocket is provided, send directly, otherwise broadcast
-            if sender_websocket:
-                 await self.security_mgr.encrypt_and_send(req_json.encode('utf-8'), sender_websocket.send)
-            else:
-                 await send_encrypted_fn(req_json.encode('utf-8')) # Use the provided broadcast/send function
+            try:
+                await send_encrypted_func(req_json.encode('utf-8'))
+            except Exception as e:
+                print(f"❌ 发送文件请求失败 ({Path(file_path).name}): {e}")
+                # Consider how to handle partial request failures
 
             await asyncio.sleep(ClipboardConfig.NETWORK_DELAY) # Small delay between requests
 
