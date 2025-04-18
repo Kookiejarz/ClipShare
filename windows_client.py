@@ -405,7 +405,6 @@ class WindowsClipboardClient:
     async def send_clipboard_changes(self, websocket):
         """监控并发送剪贴板变化"""
         last_send_attempt = 0
-        last_processed_content = None
         min_interval = 0.5  # 最小检查间隔（秒）
         
         async def broadcast_fn(data):
@@ -415,10 +414,12 @@ class WindowsClipboardClient:
                 print(f"❌ 发送数据失败: {e}")
         
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
+            current_content = pyperclip.paste()
             try:
                 # 新增：忽略窗口判断
-                if hasattr(self, "ignore_clipboard_until") and time.time() < self.ignore_clipboard_until:
+                if current_content and current_content != getattr(self, "_last_processed_content", None):
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                    self._last_processed_content = current_content
                     continue
 
                 if self.is_receiving:
@@ -676,6 +677,9 @@ class WindowsClipboardClient:
             self.last_content_hash = content_hash
             self.last_update_time = time.time()
             self.ignore_clipboard_until = time.time() + 2.0
+            
+            # 新增：同步更新 last_processed_content，防止回环
+            self._last_processed_content = text
             
             # 显示收到的文本(限制长度)
             max_display = 50
