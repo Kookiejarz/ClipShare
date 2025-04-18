@@ -433,7 +433,7 @@ class ClipboardListener:
             self.server.close()
         print("👋 感谢使用 UniPaste 服务器!")
 
-    def _get_files_content_hash(self, file_paths):
+    def get_files_content_hash(self, file_paths):
         md5 = hashlib.md5()
         for path in file_paths:
             try:

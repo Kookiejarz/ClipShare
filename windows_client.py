@@ -435,7 +435,7 @@ class WindowsClipboardClient:
                 # 首先检查是否有文件
                 file_paths = self._get_clipboard_file_paths()
                 if file_paths:
-                    content_hash = self._get_files_content_hash(file_paths)
+                    content_hash = self.get_files_content_hash(file_paths)
                     if not content_hash or content_hash == self.last_file_content_hash:
                         # 跳过内容未变的文件
                         return
@@ -714,7 +714,7 @@ class WindowsClipboardClient:
             # 如果文件传输完成
             if is_complete:
                 file_path = self.file_handler.file_transfers[filename]["path"]
-                content_hash = self._get_files_content_hash([file_path])
+                content_hash = self.get_files_content_hash([file_path])
                 print(f"✅ 文件接收完成: {file_path}")
                 
                 if content_hash == self.last_file_content_hash:
@@ -910,7 +910,7 @@ class WindowsClipboardClient:
             traceback.print_exc()
             return False
 
-    def _get_files_content_hash(self, file_paths):
+    def get_files_content_hash(self, file_paths):
         md5 = hashlib.md5()
         for path in file_paths:
             try:

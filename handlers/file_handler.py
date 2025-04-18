@@ -431,7 +431,7 @@ class FileHandler:
             return False
 
         file_paths = [f["path"] for f in files if "path" in f]
-        content_hashes = [self._get_files_content_hash([p]) for p in file_paths]
+        content_hashes = [self.get_files_content_hash([p]) for p in file_paths]
         for h in content_hashes:
             if h and h in self.file_cache:
                 print("⏭️ 跳过已存在的文件内容，不再请求")
