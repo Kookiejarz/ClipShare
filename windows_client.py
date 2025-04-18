@@ -8,10 +8,14 @@ import hashlib
 import sys
 import base64
 import time
+import time
 from pathlib import Path
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
 from utils.message_format import ClipMessage, MessageType
+from handlers.file_handler import FileHandler
+from utils.platform_config import verify_platform, IS_WINDOWS
+from config import ClipboardConfig
 from handlers.file_handler import FileHandler
 from utils.platform_config import verify_platform, IS_WINDOWS
 from config import ClipboardConfig
@@ -423,6 +427,7 @@ class WindowsClipboardClient:
                 #     pass
             finally:
                 win32clipboard.CloseClipboard()
+                
         except Exception as e:
             # Handle specific pywintypes.error if needed
             if "OpenClipboard" in str(e) or "GetClipboardData" in str(e):
