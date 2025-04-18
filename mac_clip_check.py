@@ -169,9 +169,18 @@ class ClipboardListener:
                 except asyncio.CancelledError:
                     print(f"⏹️ {device_id} 的连接处理已取消")
                     break
+                except Exception as e:
+                    print(f"❌ handle_client 内部异常: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    break  # 断开连接
                 
-        except websockets.exceptions.ConnectionClosed:
-            print(f"📴 设备 {device_id or '未知设备'} 断开连接")
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"📴 设备 {device_id or '未知设备'} 断开连接: {e}")
+        except Exception as e:
+            print(f"❌ handle_client 外部异常: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             if websocket in self.connected_clients:
                 self.connected_clients.remove(websocket)
@@ -217,7 +226,8 @@ class ClipboardListener:
                     
             elif message["type"] == MessageType.FILE_RESPONSE:
                 # 处理文件响应 - 移除 await
-                if self.file_handler.handle_received_chunk(message):
+                if self.file_handler.handle_received_chunk(message):  # 直接调用，不使用 await
+                    # 文件接收完成，更新剪贴板
                     filename = message.get("filename")
                     if filename in self.file_handler.file_transfers:
                         file_path = self.file_handler.file_transfers[filename]["path"]
@@ -431,6 +441,21 @@ class ClipboardListener:
         if self.server:
             self.server.close()
         print("👋 感谢使用 UniPaste 服务器!")
+
+    def get_files_content_hash(self, file_paths):
+        md5 = hashlib.md5()
+        for path in file_paths:
+            try:
+                with open(path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        md5.update(chunk)
+            except Exception as e:
+                print(f"❌ 计算文件哈希失败: {path} - {e}")
+                return None
+        return md5.hexdigest()
 
 async def main():
     listener = ClipboardListener()

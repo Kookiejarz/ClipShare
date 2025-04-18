@@ -49,6 +49,7 @@ class WindowsClipboardClient:
         self.last_content_hash = None
         self.last_update_time = 0
         self.last_format_log = set()
+        self.last_file_content_hash = None  # 在 __init__ 里初始化
         
         # Initialize file handler
         self.file_handler = FileHandler(
@@ -405,7 +406,6 @@ class WindowsClipboardClient:
     async def send_clipboard_changes(self, websocket):
         """监控并发送剪贴板变化"""
         last_send_attempt = 0
-        last_processed_content = None
         min_interval = 0.5  # 最小检查间隔（秒）
         
         async def broadcast_fn(data):
@@ -413,7 +413,10 @@ class WindowsClipboardClient:
                 await websocket.send(data)
             except Exception as e:
                 print(f"❌ 发送数据失败: {e}")
-        
+                import traceback
+                traceback.print_exc()
+                self.connection_status = ConnectionStatus.DISCONNECTED
+
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
             try:
                 # 新增：忽略窗口判断
@@ -433,50 +436,50 @@ class WindowsClipboardClient:
                     continue
                     
                 # 首先检查是否有文件
-                file_paths = self._get_clipboard_file_paths()
+                file_paths = self._get_clipboard_file_paths()  # <-- 确保这里调用的是 self._get_clipboard_file_paths()
                 if file_paths:
-                    # 跳过Mac临时路径
-                    for path in file_paths:
-                        if self._looks_like_temp_file_path(str(path)):
-                            print(f"⏭️ 跳过Mac临时文件路径，不同步: {path}")
-                            return
-                    # 计算文件内容哈希
-                    content_hash = self._get_files_content_hash(file_paths)
-                    if not content_hash:
+                    content_hash = self.get_files_content_hash(file_paths)
+                    if not content_hash or content_hash == self.last_file_content_hash:
+                        # 跳过内容未变的文件
                         await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                         continue
-
-                    # 只有内容哈希变化才同步
+                    # 如果有文件，创建并发送文件消息
+                    file_msg = ClipMessage.file_message(file_paths)
+                    message_json = ClipMessage.serialize(file_msg)
+                    
+                    # 计算文件信息的哈希值
+                    content_hash = hashlib.md5(str(file_paths).encode()).hexdigest()
+                    
+                    # 检查是否是刚刚处理过的内容
                     if content_hash != self.last_content_hash:
-                        # 如果有文件，创建并发送文件消息
-                        file_msg = ClipMessage.file_message(file_paths)
-                        message_json = ClipMessage.serialize(file_msg)
+                        # 加密并发送
+                        encrypted_data = self.security_mgr.encrypt_message(
+                            message_json.encode('utf-8')
+                        )
+                        await broadcast_fn(encrypted_data)
                         
-                        # 计算文件信息的哈希值
-                        content_hash = hashlib.md5(str(file_paths).encode()).hexdigest()
-                        
-                        # 检查是否是刚刚处理过的内容
-                        if content_hash != self.last_content_hash:
-                            # 加密并发送
-                            encrypted_data = self.security_mgr.encrypt_message(
-                                message_json.encode('utf-8')
-                            )
-                            await broadcast_fn(encrypted_data)
-                            
-                            # 处理文件传输
-                            print("🔄 准备传输文件内容...")
+                        # 处理文件传输
+                        print("🔄 准备传输文件内容...")
+                        try:
                             for file_path in file_paths:
                                 await self.handle_file_transfer(file_path, broadcast_fn)
-                            
-                            # 更新状态
-                            self.last_content_hash = content_hash
-                            self.last_update_time = current_time
+                        except Exception as e:
+                            print(f"❌ 文件传输异常: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            self.connection_status = ConnectionStatus.DISCONNECTED
+                            break
+                        
+                        # 更新状态
+                        self.last_content_hash = content_hash
+                        self.last_update_time = current_time
+                        self.last_file_content_hash = content_hash
                 else:
                     # 如果没有文件，检查文本内容
                     current_content = pyperclip.paste()
                     
                     # 只有当内容真正发生变化时才处理
-                    if current_content and current_content != last_processed_content:
+                    if current_content and current_content != getattr(self, "_last_processed_content", None):
                         # 检查是否是自己刚刚设置的内容
                         content_hash = hashlib.md5(current_content.encode()).hexdigest()
                         if (content_hash != self.last_content_hash or 
@@ -493,7 +496,7 @@ class WindowsClipboardClient:
                             # 更新状态
                             self.last_content_hash = content_hash
                             self.last_update_time = current_time
-                            last_processed_content = current_content
+                            self._last_processed_content = current_content
                             
                             # 显示发送的内容
                             max_display = 50
@@ -506,14 +509,11 @@ class WindowsClipboardClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if self.running and self.connection_status == ConnectionStatus.CONNECTED:
-                    print(f"❌ 发送错误: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    if "connection" in str(e).lower():
-                        self.connection_status = ConnectionStatus.DISCONNECTED
-                        break
-                await asyncio.sleep(1)
+                print(f"❌ send_clipboard_changes 主循环异常: {e}")
+                import traceback
+                traceback.print_exc()
+                self.connection_status = ConnectionStatus.DISCONNECTED
+                break
     
     async def receive_clipboard_changes(self, websocket):
         """接收来自Mac的剪贴板变化"""
@@ -688,6 +688,10 @@ class WindowsClipboardClient:
             pyperclip.copy(text)
             self.last_content_hash = content_hash
             self.last_update_time = time.time()
+            self.ignore_clipboard_until = time.time() + 2.0
+            
+            # 新增：同步更新 last_processed_content，防止回环
+            self._last_processed_content = text
             
             # 显示收到的文本(限制长度)
             max_display = 50
@@ -700,6 +704,7 @@ class WindowsClipboardClient:
             self.is_receiving = False
 
     async def _handle_file_response(self, message):
+        """处理接收到的文件响应"""
         try:
             # 解析文件信息
             filename = message.get("filename")
@@ -717,7 +722,12 @@ class WindowsClipboardClient:
             # 如果文件传输完成
             if is_complete:
                 file_path = self.file_handler.file_transfers[filename]["path"]
+                content_hash = self.get_files_content_hash([file_path])
                 print(f"✅ 文件接收完成: {file_path}")
+                
+                if content_hash == self.last_file_content_hash:
+                    print("⏭️ 跳过内容重复的文件，不设置到剪贴板")
+                    return
                 
                 try:
                     import win32clipboard
@@ -759,6 +769,7 @@ class WindowsClipboardClient:
                     # 更新内容哈希以防止回传
                     self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
                     self.last_update_time = time.time()
+                    self.last_file_content_hash = content_hash
                     
                 except Exception as e:
                     print(f"❌ 设置剪贴板文件失败: {e}")
@@ -799,6 +810,43 @@ class WindowsClipboardClient:
                     # 新增：设置忽略窗口，防止回传
                     self.ignore_clipboard_until = time.time() + 2.0
     
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # 备用方案：使用 shell32 API
+                    try:
+                        from win32com.shell import shell, shellcon
+                        import pythoncom
+                        
+                        pythoncom.CoInitialize()
+                        data_obj = pythoncom.CoCreateInstance(
+                            shell.CLSID_DragDropHelper,
+                            None,
+                            pythoncom.CLSCTX_INPROC_SERVER,
+                            shell.IID_IDropTarget
+                        )
+                        
+                        data_obj.SetData([(shellcon.CF_HDROP, None, [str(file_path)])])
+                        win32clipboard.OpenClipboard()
+                        try:
+                            win32clipboard.EmptyClipboard()
+                            win32clipboard.SetClipboardData(win32con.CF_HDROP, data_obj)
+                            print(f"📎 使用备用方法添加文件到剪贴板: {filename}")
+                        finally:
+                            win32clipboard.CloseClipboard()
+                            
+                    except Exception as backup_err:
+                        print(f"❌ 备用方法也失败了: {backup_err}")
+                        # 最后的备用方案：仅设置文本路径
+                        try:
+                            pyperclip.copy(str(file_path))
+                            print(f"📎 已将文件路径作为文本复制到剪贴板: {filename}")
+                        except:
+                            print("❌ 所有剪贴板操作方法都失败了")
+                    
+                    # 新增：设置忽略窗口，防止回传
+                    self.ignore_clipboard_until = time.time() + 5.0
+    
         except Exception as e:
             print(f"❌ 处理文件响应失败: {e}")
         finally:
@@ -807,7 +855,7 @@ class WindowsClipboardClient:
     async def handle_file_transfer(self, file_path: str, broadcast_fn):
         """处理文件传输，支持大文件的分块传输"""
         path_obj = Path(file_path)
-        MAX_CHUNK_SIZE = 50000 * 1024  # 500KB per chunk (to stay under WebSocket limit after base64 encoding)
+        MAX_CHUNK_SIZE = 700 * 1024  # 500KB per chunk (to stay under WebSocket limit after base64 encoding)
         
         if not path_obj.exists() or not path_obj.is_file():
             print(f"⚠️ 文件不存在或无效: {file_path}")
@@ -816,7 +864,7 @@ class WindowsClipboardClient:
         try:
             file_size = path_obj.stat().st_size
             total_chunks = (file_size + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
-            print(f"📤 开始传输文件: {path_obj.name} ({file_size/1024/1024:.1f}MB, {total_chunks}块}")
+            print(f"📤 开始传输文件: {path_obj.name} ({file_size/1024/1024:.1f}MB, {total_chunks}块)")
             
             # 发送文件开始消息
             start_msg = {
@@ -858,7 +906,13 @@ class WindowsClipboardClient:
                     print(f"\r📤 传输文件 {path_obj.name}: {progress}", end="", flush=True)
                     
                     # 发送块并等待一小段时间避免网络拥塞
-                    await broadcast_fn(encrypted_chunk)
+                    try:
+                        await broadcast_fn(encrypted_chunk)
+                    except Exception as e:
+                        print(f"❌ 发送文件块失败: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        raise
                     await asyncio.sleep(0.1)  # 增加延迟以防止网络拥塞
                     
             print(f"\n✅ 文件 {path_obj.name} 传输完成")
@@ -869,6 +923,21 @@ class WindowsClipboardClient:
             import traceback
             traceback.print_exc()
             return False
+
+    def get_files_content_hash(self, file_paths):
+        md5 = hashlib.md5()
+        for path in file_paths:
+            try:
+                with open(path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        md5.update(chunk)
+            except Exception as e:
+                print(f"❌ 计算文件哈希失败: {path} - {e}")
+                return None
+        return md5.hexdigest()
 
 def main():
     client = WindowsClipboardClient()
