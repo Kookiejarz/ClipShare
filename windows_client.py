@@ -49,6 +49,7 @@ class WindowsClipboardClient:
         self.last_content_hash = None
         self.last_update_time = 0
         self.last_format_log = set()
+        self.last_file_content_hash = None  # 在 __init__ 里初始化
         
         # Initialize file handler
         self.file_handler = FileHandler(
@@ -434,6 +435,10 @@ class WindowsClipboardClient:
                 # 首先检查是否有文件
                 file_paths = self._get_clipboard_file_paths()
                 if file_paths:
+                    content_hash = self._get_files_content_hash(file_paths)
+                    if not content_hash or content_hash == self.last_file_content_hash:
+                        # 跳过内容未变的文件
+                        return
                     # 如果有文件，创建并发送文件消息
                     file_msg = ClipMessage.file_message(file_paths)
                     message_json = ClipMessage.serialize(file_msg)
@@ -457,6 +462,7 @@ class WindowsClipboardClient:
                         # 更新状态
                         self.last_content_hash = content_hash
                         self.last_update_time = current_time
+                        self.last_file_content_hash = content_hash
                 else:
                     # 如果没有文件，检查文本内容
                     current_content = pyperclip.paste()
@@ -708,7 +714,12 @@ class WindowsClipboardClient:
             # 如果文件传输完成
             if is_complete:
                 file_path = self.file_handler.file_transfers[filename]["path"]
+                content_hash = self._get_files_content_hash([file_path])
                 print(f"✅ 文件接收完成: {file_path}")
+                
+                if content_hash == self.last_file_content_hash:
+                    print("⏭️ 跳过内容重复的文件，不设置到剪贴板")
+                    return
                 
                 try:
                     import win32clipboard
@@ -750,6 +761,7 @@ class WindowsClipboardClient:
                     # 更新内容哈希以防止回传
                     self.last_content_hash = hashlib.md5(str(file_path).encode()).hexdigest()
                     self.last_update_time = time.time()
+                    self.last_file_content_hash = content_hash
                     
                 except Exception as e:
                     print(f"❌ 设置剪贴板文件失败: {e}")
@@ -897,6 +909,21 @@ class WindowsClipboardClient:
             import traceback
             traceback.print_exc()
             return False
+
+    def _get_files_content_hash(self, file_paths):
+        md5 = hashlib.md5()
+        for path in file_paths:
+            try:
+                with open(path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        md5.update(chunk)
+            except Exception as e:
+                print(f"❌ 计算文件哈希失败: {path} - {e}")
+                return None
+        return md5.hexdigest()
 
 def main():
     client = WindowsClipboardClient()

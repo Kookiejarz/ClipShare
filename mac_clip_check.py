@@ -433,6 +433,21 @@ class ClipboardListener:
             self.server.close()
         print("👋 感谢使用 UniPaste 服务器!")
 
+    def _get_files_content_hash(self, file_paths):
+        md5 = hashlib.md5()
+        for path in file_paths:
+            try:
+                with open(path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        md5.update(chunk)
+            except Exception as e:
+                print(f"❌ 计算文件哈希失败: {path} - {e}")
+                return None
+        return md5.hexdigest()
+
 async def main():
     listener = ClipboardListener()
     
