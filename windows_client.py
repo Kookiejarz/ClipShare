@@ -847,7 +847,7 @@ class WindowsClipboardClient:
     async def handle_file_transfer(self, file_path: str, broadcast_fn):
         """处理文件传输，支持大文件的分块传输"""
         path_obj = Path(file_path)
-        MAX_CHUNK_SIZE = 50000 * 1024  # 500KB per chunk (to stay under WebSocket limit after base64 encoding)
+        MAX_CHUNK_SIZE = 700 * 1024  # 500KB per chunk (to stay under WebSocket limit after base64 encoding)
         
         if not path_obj.exists() or not path_obj.is_file():
             print(f"⚠️ 文件不存在或无效: {file_path}")
