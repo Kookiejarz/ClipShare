@@ -32,21 +32,18 @@ class FileHandler:
         print(f"✅ 文件处理初始化成功，临时目录: {self.temp_dir}")
 
     async def handle_file_transfer(self, file_path: str, broadcast_fn):
-        """处理文件传输"""
+        """处理文件传输（自动分块大文件）"""
         path_obj = Path(file_path)
-        
-        # 增强文件存在性检查
         try:
             if not path_obj.exists():
-                print(f"⚠️ 检查文件存在性: {file_path} -> 不存在")
-                abs_path = path_obj.absolute()
-                print(f"🔍 尝试绝对路径: {abs_path}")
-                path_obj = abs_path
-                
-                if not path_obj.exists():
-                    print(f"❌ 文件确实不存在: {file_path}")
-                    return False
+                print(f"❌ 文件不存在: {file_path}")
+                return False
 
+            file_size = path_obj.stat().st_size
+            # 如果文件大于1MB，强制分块传输
+            if file_size > 1024 * 1024:
+                return await self._transfer_small_file(path_obj, file_size, broadcast_fn)
+            # ...existing code for small file...
             print(f"✅ 文件已找到: {path_obj}")
             file_size = path_obj.stat().st_size
             print(f"📤 开始处理文件: {path_obj.name} ({file_size} 字节)")
@@ -89,7 +86,7 @@ class FileHandler:
     async def _transfer_small_file(self, path_obj: Path, file_size: int, broadcast_fn):
         """传输小文件"""
         try:
-            chunk_size = 1024 * 1024  # 1MB
+            chunk_size = 700 * 1024  # 1MB
             total_chunks = (file_size + chunk_size - 1) // chunk_size
             
             print(f"📤 自动传输文件: {path_obj.name} ({file_size} 字节, {total_chunks} 块)")
@@ -423,6 +420,26 @@ class FileHandler:
             return path
         return None
 
+    @staticmethod
+    def get_files_content_hash(file_paths):
+        """计算多个文件内容的MD5哈希值，跳过不存在的文件"""
+        md5 = hashlib.md5()
+        for path in file_paths:
+            try:
+                with open(path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        md5.update(chunk)
+            except FileNotFoundError:
+                print(f"⚠️ 文件不存在，跳过哈希: {path}")
+                continue
+            except Exception as e:
+                print(f"❌ 计算文件哈希失败: {path} - {e}")
+                continue
+        return md5.hexdigest()
+
     async def handle_received_files(self, message, sender_websocket, broadcast_fn):
         """处理收到的文件信息"""
         files = message["files"]
@@ -430,6 +447,14 @@ class FileHandler:
             print("❌ 收到空的文件列表")
             return False
 
+        file_paths = [f["path"] for f in files if "path" in f]
+        content_hashes = [self.get_files_content_hash([p]) for p in file_paths]
+        for h in content_hashes:
+            if h and h in self.file_cache:
+                print("⏭️ 跳过已存在的文件内容，不再请求")
+                return h
+        # ...后续请求文件内容...
+        
         file_names = [f["filename"] for f in files]
         print(f"📥 收到文件信息: {', '.join(file_names[:3])}{' 等' if len(file_names) > 3 else ''}")
 

@@ -24,6 +24,8 @@ class ClipboardListener:
         self._init_state_flags()
         self._init_file_handling()
         self._init_encryption()
+        self.last_remote_content_hash = None
+        self.last_remote_update_time = 0
         
     def _init_basic_components(self):
         """初始化基础组件"""
@@ -208,6 +210,10 @@ class ClipboardListener:
                 self.pasteboard.setString_forType_(text, AppKit.NSPasteboardTypeString)
                 self.last_change_count = self.pasteboard.changeCount()
                 self.last_update_time = time.time()
+                # 新增：记录远程内容哈希和时间
+                content_hash = hashlib.md5(text.encode()).hexdigest()
+                self.last_remote_content_hash = content_hash
+                self.last_remote_update_time = time.time()
                 
                 # 显示接收到的文本(限制长度)
                 max_display = 50
@@ -318,6 +324,18 @@ class ClipboardListener:
                 if hasattr(self, "ignore_clipboard_until") and current_time < self.ignore_clipboard_until:
                     await asyncio.sleep(0.3)
                     continue
+
+                # 检查文本回环
+                if AppKit.NSPasteboardTypeString in self.pasteboard.types():
+                    text = self.pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
+                    if text:
+                        content_hash = hashlib.md5(text.encode()).hexdigest()
+                        # 防止回环：如果内容和最近一次远程同步内容一致且时间在2秒内，跳过
+                        if (self.last_remote_content_hash == content_hash and 
+                            current_time - self.last_remote_update_time < 2.0):
+                            # print("⏭️ 跳过回环内容")
+                            await asyncio.sleep(0.3)
+                            continue
             
                 # 三重防护: 1) 确保不是接收状态 2) 确保与上次更新间隔充足 3) 确保处理频率不会太高
                 if (not self.is_receiving and 

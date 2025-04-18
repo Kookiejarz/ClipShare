@@ -5,8 +5,8 @@ class ClipboardConfig:
     """剪贴板配置类"""
     
     # 文件传输相关
-    MAX_FILE_SIZE_AUTO = 10 * 1024 * 1024  # 10MB自动传输限制
-    CHUNK_SIZE = 1024 * 1024  # 1MB分块大小
+    MAX_FILE_SIZE_AUTO = 100 * 1024 * 1024  # 100MB自动传输限制
+    CHUNK_SIZE = 700 * 1024  # 1MB分块大小
     
     # 时间间隔配置
     MIN_PROCESS_INTERVAL = 0.8  # 最小处理间隔
