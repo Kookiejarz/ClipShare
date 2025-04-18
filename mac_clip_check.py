@@ -409,15 +409,21 @@ class ClipboardListener:
         """停止服务器运行"""
         print("\n⏹️ 正在停止服务器...")
         self.running = False
-        
+
         # 关闭服务发现
         if hasattr(self, 'discovery'):
             self.discovery.close()
-        
+        # 清理剪贴板同步相关缓存
+        self.last_content_hash = None
+        self.last_update_time = 0
+        # 清理文件处理器缓存
+        if hasattr(self, 'file_handler'):
+            self.file_handler.file_transfers.clear()
+            self.file_handler.file_cache.clear()
+            self.file_handler.pending_transfers.clear()
         # 关闭WebSocket服务器
         if self.server:
             self.server.close()
-        
         print("👋 感谢使用 UniPaste 服务器!")
 
 async def main():

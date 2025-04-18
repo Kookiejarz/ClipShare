@@ -119,6 +119,15 @@ class WindowsClipboardClient:
         # 关闭发现服务
         if hasattr(self, 'discovery'):
             self.discovery.close()
+        # 清理剪贴板同步相关缓存
+        self.last_content_hash = None
+        self.last_update_time = 0
+        self.last_format_log.clear()
+        # 清理文件处理器缓存
+        if hasattr(self, 'file_handler'):
+            self.file_handler.file_transfers.clear()
+            self.file_handler.file_cache.clear()
+            self.file_handler.pending_transfers.clear()
         print("👋 感谢使用 UniPaste!")
 
     def on_service_found(self, ws_url):
