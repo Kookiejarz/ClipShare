@@ -108,7 +108,7 @@ jobs:
 
       - name: Build Windows application
         run: |
-          pyinstaller --onefile --name UniPaste-Win windows_client.py
+          pyinstaller --onefile --name UniPaste-Win windows_client.py --add-data "utils;utils" --add-data "handlers;handlers"
 
       - name: Package Windows application
         run: |
