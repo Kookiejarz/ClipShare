@@ -433,7 +433,7 @@ class WindowsClipboardClient:
                     continue
                     
                 # 首先检查是否有文件
-                file_paths = self._get_clipboard_file_paths()
+                file_paths = self._get_clipboard_file_paths()  # <-- 确保这里调用的是 self._get_clipboard_file_paths()
                 if file_paths:
                     content_hash = self.get_files_content_hash(file_paths)
                     if not content_hash or content_hash == self.last_file_content_hash:
