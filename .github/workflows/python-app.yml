@@ -42,7 +42,7 @@ jobs:
                       datas=[('LICENSE', '.'), ('utils', 'utils'), ('handlers', 'handlers')],
                       hiddenimports=['AppKit', 'websockets', 'cryptography', 
                                      'utils.security.crypto', 'utils.network.discovery',
-                                     'handlers.xxx', 'handlers.yyy'],  # 替换为你的handlers下的模块
+                                     'handlers.file_handler'],  # 替换为你的handlers下的模块
                       hookspath=[],
                       hooksconfig={},
                       runtime_hooks=[],
