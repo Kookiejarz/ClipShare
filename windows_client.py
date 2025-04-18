@@ -8,7 +8,6 @@ import hashlib
 import sys
 import base64
 import time
-import time
 from pathlib import Path
 from utils.security.crypto import SecurityManager
 from utils.network.discovery import DeviceDiscovery
@@ -292,7 +291,7 @@ class WindowsClipboardClient:
         async with websockets.connect(
             self.ws_url,
             subprotocols=["binary"],
-            max_size=10 * 1024 * 1024, # Allow larger messages (e.g., 10MB) for file chunks
+            max_size= 10 * 1024 * 1024, # Allow larger messages (e.g., 10MB) for file chunks
             ping_interval=20,
             ping_timeout=20
         ) as websocket:
