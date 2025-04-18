@@ -407,6 +407,11 @@ class WindowsClipboardClient:
         
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
             try:
+                # 新增：忽略窗口判断
+                if hasattr(self, "ignore_clipboard_until") and time.time() < self.ignore_clipboard_until:
+                    await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                    continue
+
                 if self.is_receiving:
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                     continue
@@ -769,6 +774,9 @@ class WindowsClipboardClient:
                             print(f"📎 已将文件路径作为文本复制到剪贴板: {filename}")
                         except:
                             print("❌ 所有剪贴板操作方法都失败了")
+                    
+                    # 新增：设置忽略窗口，防止回传
+                    self.ignore_clipboard_until = time.time() + 2.0
     
         except Exception as e:
             print(f"❌ 处理文件响应失败: {e}")
