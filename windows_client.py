@@ -414,12 +414,10 @@ class WindowsClipboardClient:
                 print(f"❌ 发送数据失败: {e}")
         
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
-            current_content = pyperclip.paste()
             try:
                 # 新增：忽略窗口判断
-                if current_content and current_content != getattr(self, "_last_processed_content", None):
+                if hasattr(self, "ignore_clipboard_until") and time.time() < self.ignore_clipboard_until:
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
-                    self._last_processed_content = current_content
                     continue
 
                 if self.is_receiving:
@@ -464,7 +462,7 @@ class WindowsClipboardClient:
                     current_content = pyperclip.paste()
                     
                     # 只有当内容真正发生变化时才处理
-                    if current_content and current_content != last_processed_content:
+                    if current_content and current_content != getattr(self, "_last_processed_content", None):
                         # 检查是否是自己刚刚设置的内容
                         content_hash = hashlib.md5(current_content.encode()).hexdigest()
                         if (content_hash != self.last_content_hash or 
@@ -481,7 +479,7 @@ class WindowsClipboardClient:
                             # 更新状态
                             self.last_content_hash = content_hash
                             self.last_update_time = current_time
-                            last_processed_content = current_content
+                            self._last_processed_content = current_content
                             
                             # 显示发送的内容
                             max_display = 50
