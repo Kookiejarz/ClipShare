@@ -147,7 +147,7 @@ class ClipboardListener:
             self.connected_clients.add(websocket)
             print(f"✅ 设备 {device_id} 已连接并完成密钥交换")
 
-            while self.running and websocket.open:
+            while self.running: # Rely on exceptions inside the loop to detect closure
                 try:
                     # Use longer timeout or rely on keepalive if implemented
                     encrypted_data = await asyncio.wait_for(websocket.recv(), timeout=30.0)
@@ -160,23 +160,24 @@ class ClipboardListener:
                         await asyncio.wait_for(pong_waiter, timeout=5)
                     except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
                         print(f"⌛ 与 {device_id} 的连接超时或关闭，断开")
-                        break
+                        break # Exit loop on timeout/close during ping
                     continue # Continue loop after successful ping/pong
                 except asyncio.CancelledError:
                     print(f"⏹️ {device_id} 的连接处理已取消")
-                    break
+                    break # Exit loop on cancellation
                 except websockets.exceptions.ConnectionClosedOK:
                      print(f"ℹ️ 设备 {device_id} 正常断开连接")
-                     break
+                     break # Exit loop on normal closure
                 except websockets.exceptions.ConnectionClosedError as e:
                      print(f"🔌 设备 {device_id} 异常断开连接: {e}")
-                     break
+                     break # Exit loop on error closure
                 except Exception as e:
                     print(f"❌ 处理来自 {device_id} 的数据时出错: {e}")
                     import traceback
                     traceback.print_exc()
-                    # Consider breaking the loop on persistent errors
-                    await asyncio.sleep(1) # Avoid tight loop on error
+                    # Simply sleep without trying to check connection state
+                    # The ConnectionClosed exceptions will catch closed connections
+                    await asyncio.sleep(1) # Avoid tight loop on other errors
 
         except websockets.exceptions.ConnectionClosed as e:
             # This might catch cases where connection closes before loop starts

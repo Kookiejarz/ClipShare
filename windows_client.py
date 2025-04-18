@@ -307,6 +307,8 @@ class WindowsClipboardClient:
                       traceback.print_exc()
 
             print("ℹ️ 同步会话结束")
+            # Always set status to DISCONNECTED before returning
+            self.connection_status = ConnectionStatus.DISCONNECTED
             # Connection will close automatically when 'async with' block exits
 
 
