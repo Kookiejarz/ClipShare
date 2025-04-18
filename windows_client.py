@@ -787,6 +787,43 @@ class WindowsClipboardClient:
                     # 新增：设置忽略窗口，防止回传
                     self.ignore_clipboard_until = time.time() + 2.0
     
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # 备用方案：使用 shell32 API
+                    try:
+                        from win32com.shell import shell, shellcon
+                        import pythoncom
+                        
+                        pythoncom.CoInitialize()
+                        data_obj = pythoncom.CoCreateInstance(
+                            shell.CLSID_DragDropHelper,
+                            None,
+                            pythoncom.CLSCTX_INPROC_SERVER,
+                            shell.IID_IDropTarget
+                        )
+                        
+                        data_obj.SetData([(shellcon.CF_HDROP, None, [str(file_path)])])
+                        win32clipboard.OpenClipboard()
+                        try:
+                            win32clipboard.EmptyClipboard()
+                            win32clipboard.SetClipboardData(win32con.CF_HDROP, data_obj)
+                            print(f"📎 使用备用方法添加文件到剪贴板: {filename}")
+                        finally:
+                            win32clipboard.CloseClipboard()
+                            
+                    except Exception as backup_err:
+                        print(f"❌ 备用方法也失败了: {backup_err}")
+                        # 最后的备用方案：仅设置文本路径
+                        try:
+                            pyperclip.copy(str(file_path))
+                            print(f"📎 已将文件路径作为文本复制到剪贴板: {filename}")
+                        except:
+                            print("❌ 所有剪贴板操作方法都失败了")
+                    
+                    # 新增：设置忽略窗口，防止回传
+                    self.ignore_clipboard_until = time.time() + 5.0
+    
         except Exception as e:
             print(f"❌ 处理文件响应失败: {e}")
         finally:
