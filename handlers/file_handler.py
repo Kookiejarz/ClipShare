@@ -480,18 +480,12 @@ class FileHandler:
                 import win32clipboard
                 import win32con
                 try:
-                    import win32clipboard
-                    import win32con
                     win32clipboard.OpenClipboard()
                     win32clipboard.EmptyClipboard()
-                    # 支持多文件：用\0分隔，结尾双\0
-                    if isinstance(file_path, (list, tuple)):
-                        file_list = '\0'.join([str(f) for f in file_path]) + '\0\0'
-                    else:
-                        file_list = str(file_path) + '\0\0'
-                    win32clipboard.SetClipboardData(win32con.CF_HDROP, file_list)
+                    # Use CF_HDROP for proper file handling
+                    win32clipboard.SetClipboardData(win32con.CF_HDROP, tuple([path_str]))
                     win32clipboard.CloseClipboard()
-                    print(f"📎 已将文件添加到Windows剪贴板: {os.path.basename(str(file_path))}")
+                    print(f"📎 已将文件添加到Windows剪贴板: {os.path.basename(path_str)}")
                     return True
                 except Exception as e:
                     print(f"❌ Windows剪贴板操作失败: {e}")
@@ -588,82 +582,3 @@ class FileHandler:
                 print(f"⏭️ 跳过临时文件路径: \"{text[:40]}...\"")
                 return True
         return False
-
-    def get_clipboard_text(self):
-        """获取剪贴板中的文本内容（支持Mac和Windows）"""
-        if IS_MACOS:
-            pasteboard = AppKit.NSPasteboard.generalPasteboard()
-            text = pasteboard.stringForType_(AppKit.NSStringPboardType)
-            return text
-        elif IS_WINDOWS:
-            try:
-                import win32clipboard
-                import win32con
-                win32clipboard.OpenClipboard()
-                # 先判断是否有文本格式
-                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                    data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
-                    win32clipboard.CloseClipboard()
-                    return data
-                win32clipboard.CloseClipboard()
-                return None
-            except Exception as e:
-                print(f"❌ 获取Windows剪贴板文本失败: {e}")
-                return None
-        else:
-            print("⚠️ 当前平台不支持剪贴板文本获取")
-            return None
-
-    def get_clipboard_files(self):
-        """获取剪贴板中的文件路径列表（支持Mac和Windows）"""
-        if IS_MACOS:
-            pasteboard = AppKit.NSPasteboard.generalPasteboard()
-            classes = [AppKit.NSURL]
-            options = {}
-            urls = pasteboard.readObjectsForClasses_options_(classes, options)
-            if urls:
-                return [str(url.path()) for url in urls]
-            return []
-        elif IS_WINDOWS:
-            try:
-                import win32clipboard
-                import win32con
-                win32clipboard.OpenClipboard()
-                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
-                    files = win32clipboard.GetClipboardData(win32con.CF_HDROP)
-                    win32clipboard.CloseClipboard()
-                    return list(files)
-                win32clipboard.CloseClipboard()
-                return []
-            except Exception as e:
-                print(f"❌ 获取Windows剪贴板文件失败: {e}")
-                return []
-        else:
-            print("⚠️ 当前平台不支持剪贴板文件获取")
-            return []
-
-    def set_clipboard_text(self, text: str):
-        """设置剪贴板文本内容（支持Mac和Windows）"""
-        if IS_MACOS:
-            pasteboard = AppKit.NSPasteboard.generalPasteboard()
-            pasteboard.clearContents()
-            nsstring = AppKit.NSString.stringWithString_(text)
-            pasteboard.setString_forType_(nsstring, AppKit.NSStringPboardType)
-            print("📋 已设置Mac剪贴板文本")
-            return True
-        elif IS_WINDOWS:
-            try:
-                import win32clipboard
-                import win32con
-                win32clipboard.OpenClipboard()
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
-                win32clipboard.CloseClipboard()
-                print("📋 已设置Windows剪贴板文本")
-                return True
-            except Exception as e:
-                print(f"❌ 设置Windows剪贴板文本失败: {e}")
-                return False
-        else:
-            print("⚠️ 当前平台不支持设置剪贴板文本")
-            return False
