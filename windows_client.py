@@ -354,6 +354,17 @@ class WindowsClipboardClient:
             else:
                 reason = response_data.get('reason', '未知原因')
                 print(f"❌ 身份验证失败: {reason}")
+                # If we weren't connecting for the first time, our token might be invalid.
+                if not is_first_time:
+                    print("ℹ️ 本地令牌可能已失效，将尝试清除并重新注册...")
+                    try:
+                        token_path = self._get_token_path()
+                        if token_path.exists():
+                            token_path.unlink()
+                            print(f"🗑️ 已删除本地令牌文件: {token_path}")
+                        self.device_token = None # Clear token in memory
+                    except Exception as e:
+                        print(f"⚠️ 删除本地令牌文件失败: {e}")
                 return False
         except asyncio.TimeoutError:
              print("❌ 等待身份验证响应超时")
