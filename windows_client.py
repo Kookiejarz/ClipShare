@@ -415,7 +415,6 @@ class WindowsClipboardClient:
                 print(f"❌ 发送数据失败: {e}")
                 import traceback
                 traceback.print_exc()
-                # 主动断开连接，便于主循环检测
                 self.connection_status = ConnectionStatus.DISCONNECTED
 
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:

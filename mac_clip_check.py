@@ -169,9 +169,18 @@ class ClipboardListener:
                 except asyncio.CancelledError:
                     print(f"⏹️ {device_id} 的连接处理已取消")
                     break
+                except Exception as e:
+                    print(f"❌ handle_client 内部异常: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    break  # 断开连接
                 
-        except websockets.exceptions.ConnectionClosed:
-            print(f"📴 设备 {device_id or '未知设备'} 断开连接")
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"📴 设备 {device_id or '未知设备'} 断开连接: {e}")
+        except Exception as e:
+            print(f"❌ handle_client 外部异常: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             if websocket in self.connected_clients:
                 self.connected_clients.remove(websocket)
