@@ -50,6 +50,8 @@ class WindowsClipboardClient:
         self.last_update_time = 0
         self.last_format_log = set()
         self.last_file_content_hash = None  # 在 __init__ 里初始化
+        self.last_remote_content_hash = None
+        self.last_remote_update_time = 0
         
         # Initialize file handler
         self.file_handler = FileHandler(
@@ -480,11 +482,16 @@ class WindowsClipboardClient:
                     
                     # 只有当内容真正发生变化时才处理
                     if current_content and current_content != getattr(self, "_last_processed_content", None):
-                        # 检查是否是自己刚刚设置的内容
                         content_hash = hashlib.md5(current_content.encode()).hexdigest()
+                        now = time.time()
+                        # 防止回环：如果内容和最近一次远程同步内容一致且时间在2秒内，跳过
+                        if (self.last_remote_content_hash == content_hash and 
+                            now - self.last_remote_update_time < 2.0):
+                            # print(f"⏭️ 跳过回环内容")
+                            await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                            continue
                         if (content_hash != self.last_content_hash or 
-                            current_time - self.last_update_time > 1.0):
-                            
+                            now - self.last_update_time > 1.0):
                             # 创建并发送文本消息
                             text_msg = ClipMessage.text_message(current_content)
                             message_json = ClipMessage.serialize(text_msg)
@@ -495,7 +502,7 @@ class WindowsClipboardClient:
                             
                             # 更新状态
                             self.last_content_hash = content_hash
-                            self.last_update_time = current_time
+                            self.last_update_time = now
                             self._last_processed_content = current_content
                             
                             # 显示发送的内容
@@ -692,6 +699,10 @@ class WindowsClipboardClient:
             
             # 新增：同步更新 last_processed_content，防止回环
             self._last_processed_content = text
+            
+            # 新增：记录远程内容哈希和时间
+            self.last_remote_content_hash = content_hash
+            self.last_remote_update_time = time.time()
             
             # 显示收到的文本(限制长度)
             max_display = 50
