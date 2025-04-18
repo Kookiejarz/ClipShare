@@ -65,7 +65,7 @@ class ClipboardListener:
         """初始化加密系统"""
         try:
             # Key pair generation might be better done just before exchange
-            # self.security_mgr.generate_key_pair()
+            self.security_mgr.generate_key_pair()
             print("✅ 加密系统准备就绪")
         except Exception as e:
             print(f"❌ 加密系统初始化失败: {e}")

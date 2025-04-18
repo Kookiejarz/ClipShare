@@ -47,20 +47,6 @@ class SecurityManager:
             print(f"公钥反序列化失败: {e}")
             raise
 
-    # For testing purposes only
-    def generate_temporary_shared_key(self):
-        """Generate a temporary shared key for testing"""
-        try:
-            # 使用固定的种子生成相同的密钥（仅测试用）
-            import hashlib
-            # 两端使用完全相同的固定字符串
-            seed = "clipshare-test-key-2023"
-            self.shared_key = hashlib.sha256(seed.encode()).digest()
-            print(f"🔑 临时密钥生成成功，前8字节: {self.shared_key[:8].hex()}")
-            return self.shared_key
-        except Exception as e:
-            print(f"临时密钥生成失败: {e}")
-            raise
 
     def generate_shared_key(self, peer_public_key):
         """Generate shared key using ECDH"""

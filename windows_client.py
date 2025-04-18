@@ -665,7 +665,6 @@ class WindowsClipboardClient:
 
     async def perform_key_exchange(self, websocket):
         """Execute key exchange with server"""
-        # ... existing code ...
         try:
             # Generate keys if needed
             if not self.security_mgr.private_key:
