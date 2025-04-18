@@ -435,6 +435,11 @@ class WindowsClipboardClient:
                 # 首先检查是否有文件
                 file_paths = self._get_clipboard_file_paths()
                 if file_paths:
+                    # 跳过Mac临时路径
+                    for path in file_paths:
+                        if self._looks_like_temp_file_path(str(path)):
+                            print(f"⏭️ 跳过Mac临时文件路径，不同步: {path}")
+                            return
                     # 计算文件内容哈希
                     content_hash = self._get_files_content_hash(file_paths)
                     if not content_hash:
@@ -811,7 +816,7 @@ class WindowsClipboardClient:
         try:
             file_size = path_obj.stat().st_size
             total_chunks = (file_size + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
-            print(f"📤 开始传输文件: {path_obj.name} ({file_size/1024/1024:.1f}MB, {total_chunks}块)")
+            print(f"📤 开始传输文件: {path_obj.name} ({file_size/1024/1024:.1f}MB, {total_chunks}块}")
             
             # 发送文件开始消息
             start_msg = {
