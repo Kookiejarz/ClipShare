@@ -89,7 +89,7 @@ class FileHandler:
     async def _transfer_small_file(self, path_obj: Path, file_size: int, broadcast_fn):
         """传输小文件"""
         try:
-            chunk_size = 1024 * 1024  # 1MB
+            chunk_size = 700 * 1024  # 1MB
             total_chunks = (file_size + chunk_size - 1) // chunk_size
             
             print(f"📤 自动传输文件: {path_obj.name} ({file_size} 字节, {total_chunks} 块)")
@@ -430,6 +430,14 @@ class FileHandler:
             print("❌ 收到空的文件列表")
             return False
 
+        file_paths = [f["path"] for f in files if "path" in f]
+        content_hashes = [self._get_files_content_hash([p]) for p in file_paths]
+        for h in content_hashes:
+            if h and h in self.file_cache:
+                print("⏭️ 跳过已存在的文件内容，不再请求")
+                return h
+        # ...后续请求文件内容...
+        
         file_names = [f["filename"] for f in files]
         print(f"📥 收到文件信息: {', '.join(file_names[:3])}{' 等' if len(file_names) > 3 else ''}")
 
