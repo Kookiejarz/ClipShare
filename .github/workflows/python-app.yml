@@ -40,7 +40,9 @@ jobs:
                       pathex=[],
                       binaries=[],
                       datas=[('LICENSE', '.'), ('utils', 'utils')],
-                      hiddenimports=['AppKit', 'websockets', 'cryptography', 'utils.security.crypto', 'utils.network.discovery'],
+                      ['AppKit', 'websockets', 'cryptography', 
+                                     'utils.security.crypto', 'utils.network.discovery', 'utils.security.auth'
+                                     'handlers.file_handler'],
                       hookspath=[],
                       hooksconfig={},
                       runtime_hooks=[],
