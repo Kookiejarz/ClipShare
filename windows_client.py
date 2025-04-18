@@ -413,7 +413,11 @@ class WindowsClipboardClient:
                 await websocket.send(data)
             except Exception as e:
                 print(f"❌ 发送数据失败: {e}")
-        
+                import traceback
+                traceback.print_exc()
+                # 主动断开连接，便于主循环检测
+                self.connection_status = ConnectionStatus.DISCONNECTED
+
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
             try:
                 # 新增：忽略窗口判断
@@ -438,7 +442,8 @@ class WindowsClipboardClient:
                     content_hash = self.get_files_content_hash(file_paths)
                     if not content_hash or content_hash == self.last_file_content_hash:
                         # 跳过内容未变的文件
-                        return
+                        await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                        continue
                     # 如果有文件，创建并发送文件消息
                     file_msg = ClipMessage.file_message(file_paths)
                     message_json = ClipMessage.serialize(file_msg)
@@ -456,8 +461,15 @@ class WindowsClipboardClient:
                         
                         # 处理文件传输
                         print("🔄 准备传输文件内容...")
-                        for file_path in file_paths:
-                            await self.handle_file_transfer(file_path, broadcast_fn)
+                        try:
+                            for file_path in file_paths:
+                                await self.handle_file_transfer(file_path, broadcast_fn)
+                        except Exception as e:
+                            print(f"❌ 文件传输异常: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            self.connection_status = ConnectionStatus.DISCONNECTED
+                            break
                         
                         # 更新状态
                         self.last_content_hash = content_hash
@@ -498,14 +510,11 @@ class WindowsClipboardClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if self.running and self.connection_status == ConnectionStatus.CONNECTED:
-                    print(f"❌ 发送错误: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    if "connection" in str(e).lower():
-                        self.connection_status = ConnectionStatus.DISCONNECTED
-                        break
-                await asyncio.sleep(1)
+                print(f"❌ send_clipboard_changes 主循环异常: {e}")
+                import traceback
+                traceback.print_exc()
+                self.connection_status = ConnectionStatus.DISCONNECTED
+                break
     
     async def receive_clipboard_changes(self, websocket):
         """接收来自Mac的剪贴板变化"""
@@ -898,7 +907,13 @@ class WindowsClipboardClient:
                     print(f"\r📤 传输文件 {path_obj.name}: {progress}", end="", flush=True)
                     
                     # 发送块并等待一小段时间避免网络拥塞
-                    await broadcast_fn(encrypted_chunk)
+                    try:
+                        await broadcast_fn(encrypted_chunk)
+                    except Exception as e:
+                        print(f"❌ 发送文件块失败: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        raise
                     await asyncio.sleep(0.1)  # 增加延迟以防止网络拥塞
                     
             print(f"\n✅ 文件 {path_obj.name} 传输完成")
