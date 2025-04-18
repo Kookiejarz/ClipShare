@@ -188,17 +188,23 @@ class WindowsClipboardClient:
                     print(f"🔌 正在连接到服务器: {self.ws_url}")
 
                     try:
-                        # Connect with timeout
-                        async with asyncio.timeout(15): # 15 second connection timeout
-                             await self.connect_and_sync()
+                        # REMOVED: async with asyncio.timeout(15):
+                        # Call connect_and_sync directly without the outer timeout
+                        await self.connect_and_sync()
+
                         # If connect_and_sync returns normally, it means connection closed gracefully
                         print("ℹ️ 连接已关闭，将尝试重新发现和连接。")
-                        self.connection_status = ConnectionStatus.DISCONNECTED
+                        # Status is already set to DISCONNECTED inside connect_and_sync
+                        # self.connection_status = ConnectionStatus.DISCONNECTED
                         self.ws_url = None # Reset URL to trigger rediscovery
                         await asyncio.sleep(1) # Brief pause before rediscovery
 
                     except asyncio.TimeoutError:
-                         print(f"❌ 连接超时: {self.ws_url}")
+                         # This exception should now only be raised by timeouts *within*
+                         # connect_and_sync (e.g., during initial connect, auth, key exchange)
+                         # or potentially if the websocket.connect itself times out (though less likely).
+                         # The main recv/ping timeouts are handled inside receive_clipboard_changes.
+                         print(f"❌ 连接或初始握手超时: {self.ws_url}")
                          self.connection_status = ConnectionStatus.DISCONNECTED
                          self.ws_url = None # Reset URL
                          await self.wait_for_reconnect()
@@ -208,11 +214,13 @@ class WindowsClipboardClient:
                          self.ws_url = None
                          await asyncio.sleep(2) # Wait before rediscovery
                     except websockets.exceptions.WebSocketException as e:
+                         # Catches connection failures (e.g., ConnectionRefusedError)
                          print(f"❌ WebSocket 连接错误: {e}")
                          self.connection_status = ConnectionStatus.DISCONNECTED
                          self.ws_url = None
                          await self.wait_for_reconnect()
                     except Exception as e:
+                        # Catch other unexpected errors during the connection attempt/management phase
                         print(f"❌ 连接或同步时发生意外错误: {e}")
                         traceback.print_exc()
                         self.connection_status = ConnectionStatus.DISCONNECTED
