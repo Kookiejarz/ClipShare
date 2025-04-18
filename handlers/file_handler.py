@@ -9,9 +9,37 @@ from utils.platform_config import IS_MACOS, IS_WINDOWS
 from utils.message_format import ClipMessage, MessageType
 from config import ClipboardConfig
 
-# Only import AppKit on macOS
+# Only import AppKit and objc on macOS
 if IS_MACOS:
     import AppKit
+    import objc # Import objc
+
+    # Helper class to perform pasteboard operations on the main thread
+    class PasteboardSetter(AppKit.NSObject):
+        @classmethod # Use standard Python classmethod decorator
+        def setFileURL_(cls, path_str):
+            try:
+                pasteboard = AppKit.NSPasteboard.generalPasteboard()
+                pasteboard.clearContents()
+                url = AppKit.NSURL.fileURLWithPath_(path_str)
+                if not url:
+                    print(f"❌ [MainThread] 无法创建文件URL: {path_str}")
+                    return (False, -1) # Return tuple (success, change_count)
+                urls = AppKit.NSArray.arrayWithObject_(url)
+                success = pasteboard.writeObjects_(urls)
+                if success:
+                    change_count = pasteboard.changeCount()
+                    print(f"📎 [MainThread] 已将文件添加到Mac剪贴板: {Path(path_str).name}")
+                    return (True, change_count)
+                else:
+                    print(f"❌ [MainThread] 添加文件到Mac剪贴板失败: {Path(path_str).name}")
+                    return (False, -1)
+            except Exception as e:
+                print(f"❌ [MainThread] 设置剪贴板文件时出错: {e}")
+                import traceback
+                traceback.print_exc()
+                return (False, -1)
+
 
 class FileHandler:
     """文件处理管理器"""
@@ -363,27 +391,22 @@ class FileHandler:
         return True # Indicate requests were sent
 
     def set_clipboard_file(self, file_path: Path):
-        """将文件路径设置到剪贴板 (Platform specific logic remains in client/server)"""
+        """将文件路径设置到剪贴板 (Uses main thread for macOS)"""
         try:
             path_str = str(file_path)
             if IS_MACOS:
-                pasteboard = AppKit.NSPasteboard.generalPasteboard()
-                pasteboard.clearContents()
-                # Create NSURL object from the file path
-                url = AppKit.NSURL.fileURLWithPath_(path_str)
-                if not url:
-                    print(f"❌ 无法创建文件URL: {path_str}")
-                    return None
-                # Create an NSArray containing the URL
-                urls = AppKit.NSArray.arrayWithObject_(url)
-                # Write the array of URLs to the pasteboard
-                success = pasteboard.writeObjects_(urls)
+                # Perform pasteboard operation on the main thread
+                # Add the third argument: waitUntilDone=True
+                result = PasteboardSetter.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    'setFileURL:', path_str, True
+                )
+                success, change_count = result # Unpack the tuple returned from main thread
+
                 if success:
-                    print(f"📎 已将文件添加到Mac剪贴板: {file_path.name}")
-                    return pasteboard.changeCount() # Return change count for state tracking
+                    return change_count # Return change count for state tracking
                 else:
-                    print(f"❌ 添加文件到Mac剪贴板失败: {file_path.name}")
-                    return None
+                    return None # Indicate failure
+
             elif IS_WINDOWS:
                 # Windows specific logic will be called from windows_client.py
                 # This method primarily handles the macOS part or acts as a placeholder
@@ -395,7 +418,7 @@ class FileHandler:
                 print("⚠️ 未知的操作系统，无法设置剪贴板文件")
                 return None
         except Exception as e:
-            print(f"❌ 设置剪贴板文件时出错: {e}")
+            print(f"❌ 设置剪贴板文件时出错 (Outer): {e}")
             import traceback
             traceback.print_exc()
             return None

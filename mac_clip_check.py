@@ -298,6 +298,11 @@ class ClipboardListener:
                         # Record hash and time from remote sender for loop detection
                         self.last_remote_content_hash = content_hash
                         self.last_remote_update_time = time.time()
+
+                        # Add a small delay to allow pasteboard to settle
+                        await asyncio.sleep(0.1)
+                        print("DEBUG: Added small delay after setting file clipboard.")
+
                     else:
                          print(f"❌ 将文件 {completed_path.name} 设置到剪贴板失败")
 
@@ -611,6 +616,10 @@ class ClipboardListener:
 
 
 async def main():
+    # Ensure NSApplication shared instance exists for main thread operations
+    # Needs to be done before listener might use AppKit features indirectly
+    app = AppKit.NSApplication.sharedApplication() # Initialize AppKit
+
     listener = ClipboardListener()
 
     # Setup signal handling for graceful shutdown

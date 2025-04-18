@@ -492,7 +492,7 @@ class WindowsClipboardClient:
 
                     # Check if content hash is valid and different from last sent hash
                     if content_hash and content_hash != self.last_content_hash:
-                        print(f"📋 检测到剪贴板文件变化 (Hash: {content_hash[:8]}...)")
+                        #print(f"📋 检测到剪贴板文件变化 (Hash: {content_hash[:8]}...)")
                         # Send file info message
                         new_hash, update_sent = await self.file_handler.handle_clipboard_files(
                             file_paths,
