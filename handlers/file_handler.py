@@ -499,3 +499,41 @@ class FileHandler:
         # Return new state
         new_update_time = time.time()
         return content_hash, new_update_time, True
+
+class FileHandler:
+
+    
+    async def handle_text_message(self, message: dict, set_clipboard_func, 
+                                 last_content_hash: str) -> tuple[str, float]:
+        """处理接收到的文本消息"""
+        try:
+            text = message.get("content", "")
+            if not text:
+                print("⚠️ 收到空文本消息")
+                return last_content_hash, 0
+            
+            if self._looks_like_temp_file_path(text):
+                return last_content_hash, 0
+            
+            # Calculate hash before setting clipboard
+            from utils.clipboard_utils import ClipboardUtils
+            content_hash = ClipboardUtils.calculate_content_hash(text)
+            
+            # Check if duplicate
+            if content_hash == last_content_hash:
+                print("⏭️ 跳过重复内容")
+                return last_content_hash, 0
+            
+            # Set clipboard using provided function
+            if await set_clipboard_func(text):
+                display_text = ClipboardUtils.format_display_content(text)
+                print(f"📥 已复制文本: \"{display_text}\"")
+                return content_hash, time.time()
+            else:
+                print("❌ 更新剪贴板失败")
+                return last_content_hash, 0
+                
+        except Exception as e:
+            print(f"❌ 处理文本消息时出错: {e}")
+            traceback.print_exc()
+            return last_content_hash, 0
