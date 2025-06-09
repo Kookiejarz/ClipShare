@@ -54,11 +54,21 @@ class ClipboardListener:
         try:
             # Use ClipboardConfig for temp dir
             self.temp_dir = ClipboardConfig.get_temp_dir()
+            
+            # 确保 temp_dir 是 Path 对象
+            if not isinstance(self.temp_dir, Path):
+                self.temp_dir = Path(self.temp_dir)
+                
+            # 创建 FileHandler 实例
             self.file_handler = FileHandler(self.temp_dir, self.security_mgr)
+            
             # Load cache during init
             self.file_handler.load_file_cache()
         except Exception as e:
             print(f"❌ 文件处理初始化失败: {e}")
+            print(f"详细错误信息: {type(e).__name__}: {str(e)}")
+            import traceback
+            traceback.print_exc()
             raise
 
     def _init_encryption(self):
