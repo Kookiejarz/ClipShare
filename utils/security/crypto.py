@@ -11,6 +11,7 @@ class SecurityManager:
         self.private_key = None
         self.public_key = None
         self.shared_key = None
+        self.peer_public_key = None
 
     def generate_key_pair(self):
         """Generate new ECDH key pair"""
@@ -187,4 +188,30 @@ class SecurityManager:
                 
         except Exception as e:
             print(f"❌ 密钥交换失败: {e}")
+            return False
+
+    def get_public_key_pem(self) -> str:
+        """获取公钥的PEM格式字符串"""
+        if not self.private_key:
+            raise ValueError("私钥未生成")
+        
+        public_key = self.private_key.public_key()
+        pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        return pem.decode('utf-8')
+    
+    def set_peer_public_key(self, public_key_pem: str) -> bool:
+        """设置对等方的公钥"""
+        try:
+            from cryptography.hazmat.primitives import serialization
+            
+            public_key = serialization.load_pem_public_key(
+                public_key_pem.encode('utf-8')
+            )
+            self.peer_public_key = public_key
+            return True
+        except Exception as e:
+            print(f"❌ 设置对等方公钥失败: {e}")
             return False

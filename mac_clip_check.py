@@ -83,6 +83,68 @@ class ClipboardListener:
 
     # Removed load_file_cache as it's called in _init_file_handling
 
+    async def perform_key_exchange(self, websocket):
+        """执行密钥交换"""
+        try:
+            # Generate server's key pair if not already done
+            if not hasattr(self.security_mgr, 'private_key') or not self.security_mgr.private_key:
+                self.security_mgr.generate_key_pair()
+            
+            # Get server's public key
+            server_public_key = self.security_mgr.get_public_key_pem()
+            
+            # Send server's public key to client
+            key_exchange_message = {
+                'type': 'key_exchange_server',
+                'public_key': server_public_key
+            }
+            await websocket.send(json.dumps(key_exchange_message))
+            
+            # Wait for client's public key response
+            client_response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            
+            if isinstance(client_response, bytes):
+                client_response = client_response.decode('utf-8')
+            
+            client_data = json.loads(client_response)
+            
+            if client_data.get('type') != 'key_exchange_client':
+                print(f"❌ 收到无效的密钥交换响应类型: {client_data.get('type')}")
+                return False
+            
+            client_public_key_pem = client_data.get('public_key')
+            if not client_public_key_pem:
+                print("❌ 客户端未提供公钥")
+                return False
+            
+            # Store client's public key in security manager
+            if not self.security_mgr.set_peer_public_key(client_public_key_pem):
+                print("❌ 无法设置客户端公钥")
+                return False
+            
+            # Send confirmation
+            confirmation_message = {
+                'type': 'key_exchange_complete',
+                'status': 'success'
+            }
+            await websocket.send(json.dumps(confirmation_message))
+            
+            print("🔑 密钥交换成功完成")
+            return True
+            
+        except asyncio.TimeoutError:
+            print("❌ 密钥交换超时")
+            return False
+        except json.JSONDecodeError:
+            print("❌ 密钥交换响应格式无效")
+            return False
+        except Exception as e:
+            print(f"❌ 密钥交换过程中出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
         device_id = None
