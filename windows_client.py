@@ -594,6 +594,140 @@ class WindowsClipboardClient:
         finally:
             self.connection_status = ConnectionStatus.DISCONNECTED
 
+    async def monitor_clipboard(self, websocket):
+        """监控剪贴板变化并发送到服务器"""
+        last_clipboard_data = None
+        
+        while self.running and self.connection_status == ConnectionStatus.CONNECTED:
+            try:
+                # 检查剪贴板是否有变化
+                if time.time() < self.ignore_clipboard_until:
+                    await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                    continue
+                
+                current_clipboard = None
+                try:
+                    # 尝试获取剪贴板内容
+                    current_clipboard = pyperclip.paste()
+                except Exception as e:
+                    # 如果获取失败，继续等待
+                    await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                    continue
+                
+                # 检查内容是否有变化
+                if current_clipboard != last_clipboard_data and current_clipboard:
+                    # 计算内容哈希
+                    import hashlib
+                    content_hash = hashlib.md5(current_clipboard.encode()).hexdigest()
+                    
+                    # 避免发送刚接收到的内容
+                    if (content_hash != self.last_remote_content_hash and 
+                        content_hash != self.last_content_hash):
+                        
+                        print(f"📤 检测到剪贴板变化，发送到服务器...")
+                        
+                        # 创建消息
+                        message = {
+                            'type': 'text',
+                            'content': current_clipboard,
+                            'timestamp': time.time(),
+                            'hash': content_hash
+                        }
+                        
+                        try:
+                            # 发送到服务器
+                            await websocket.send(json.dumps(message))
+                            
+                            # 更新本地状态
+                            self.last_content_hash = content_hash
+                            self.last_update_time = time.time()
+                            last_clipboard_data = current_clipboard
+                            
+                            # 显示发送的内容预览
+                            display_text = current_clipboard[:50] + ("..." if len(current_clipboard) > 50 else "")
+                            print(f"📤 已发送文本: \"{display_text}\"")
+                            
+                        except Exception as e:
+                            print(f"❌ 发送剪贴板内容失败: {e}")
+                            break
+                
+                await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                
+            except asyncio.CancelledError:
+                print("🛑 剪贴板监控任务被取消")
+                break
+            except Exception as e:
+                print(f"❌ 监控剪贴板时出错: {e}")
+                break
+
+    async def receive_messages(self, websocket):
+        """接收来自服务器的消息"""
+        try:
+            while self.running and self.connection_status == ConnectionStatus.CONNECTED:
+                try:
+                    # 接收消息
+                    message = await websocket.recv()
+                    
+                    if isinstance(message, bytes):
+                        # 处理二进制消息（通常是文件数据）
+                        await self._handle_binary_message(message)
+                    else:
+                        # 处理JSON消息
+                        try:
+                            data = json.loads(message)
+                            await self._handle_json_message(data)
+                        except json.JSONDecodeError as e:
+                            print(f"❌ 解析JSON消息失败: {e}")
+                            
+                except asyncio.CancelledError:
+                    print("🛑 消息接收任务被取消")
+                    break
+                except websockets.exceptions.ConnectionClosed:
+                    print("📴 WebSocket连接已关闭")
+                    break
+                except Exception as e:
+                    print(f"❌ 接收消息时出错: {e}")
+                    break
+                
+        except Exception as e:
+            print(f"❌ 消息接收循环出错: {e}")
+        finally:
+            self.connection_status = ConnectionStatus.DISCONNECTED
+
+    async def _handle_json_message(self, data):
+        """处理JSON消息"""
+        try:
+            message_type = data.get('type')
+            
+            if message_type == 'text':
+                await self._handle_text_message(data)
+            elif message_type == 'file_chunk':
+                await self._handle_file_response(data)
+            elif message_type == 'file_complete':
+                await self._handle_file_complete(data)
+            else:
+                print(f"⚠️ 收到未知消息类型: {message_type}")
+                
+        except Exception as e:
+            print(f"❌ 处理JSON消息时出错: {e}")
+
+    async def _handle_binary_message(self, message):
+        """处理二进制消息"""
+        try:
+            # 假设二进制消息是文件数据
+            print(f"📦 收到二进制数据，大小: {len(message)} 字节")
+            # 这里可以添加文件数据处理逻辑
+        except Exception as e:
+            print(f"❌ 处理二进制消息时出错: {e}")
+
+    async def _handle_file_complete(self, data):
+        """处理文件传输完成消息"""
+        try:
+            file_name = data.get('filename', '未知文件')
+            print(f"✅ 文件传输完成: {file_name}")
+        except Exception as e:
+            print(f"❌ 处理文件完成消息时出错: {e}")
+
 
 async def main():
     client = WindowsClipboardClient()
