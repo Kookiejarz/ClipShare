@@ -86,12 +86,16 @@ class ClipboardListener:
     async def perform_key_exchange(self, websocket):
         """执行密钥交换"""
         try:
+            print("🔑 开始服务器端密钥交换...")
+            
             # Generate server's key pair if not already done
             if not hasattr(self.security_mgr, 'private_key') or not self.security_mgr.private_key:
+                print("🔧 生成服务器密钥对...")
                 self.security_mgr.generate_key_pair()
             
             # Get server's public key
             server_public_key = self.security_mgr.get_public_key_pem()
+            print(f"📤 发送服务器公钥 ({len(server_public_key)} 字符)")
             
             # Send server's public key to client
             key_exchange_message = {
@@ -99,14 +103,17 @@ class ClipboardListener:
                 'public_key': server_public_key
             }
             await websocket.send(json.dumps(key_exchange_message))
+            print("✅ 服务器公钥已发送，等待客户端响应...")
             
             # Wait for client's public key response
-            client_response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            client_response = await asyncio.wait_for(websocket.recv(), timeout=15.0)  # Increased timeout
+            print(f"📨 收到客户端响应 ({len(client_response)} 字节)")
             
             if isinstance(client_response, bytes):
                 client_response = client_response.decode('utf-8')
             
             client_data = json.loads(client_response)
+            print(f"📋 客户端消息类型: {client_data.get('type')}")
             
             if client_data.get('type') != 'key_exchange_client':
                 print(f"❌ 收到无效的密钥交换响应类型: {client_data.get('type')}")
@@ -117,10 +124,14 @@ class ClipboardListener:
                 print("❌ 客户端未提供公钥")
                 return False
             
+            print(f"📥 收到客户端公钥 ({len(client_public_key_pem)} 字符)")
+            
             # Store client's public key in security manager
             if not self.security_mgr.set_peer_public_key(client_public_key_pem):
                 print("❌ 无法设置客户端公钥")
                 return False
+            
+            print("✅ 客户端公钥已设置")
             
             # Send confirmation
             confirmation_message = {
@@ -128,15 +139,16 @@ class ClipboardListener:
                 'status': 'success'
             }
             await websocket.send(json.dumps(confirmation_message))
+            print("📤 发送密钥交换完成确认")
             
             print("🔑 密钥交换成功完成")
             return True
             
         except asyncio.TimeoutError:
-            print("❌ 密钥交换超时")
+            print("❌ 密钥交换超时 - 客户端可能未响应")
             return False
-        except json.JSONDecodeError:
-            print("❌ 密钥交换响应格式无效")
+        except json.JSONDecodeError as e:
+            print(f"❌ 密钥交换响应格式无效: {e}")
             return False
         except Exception as e:
             print(f"❌ 密钥交换过程中出错: {e}")

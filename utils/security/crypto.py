@@ -211,7 +211,10 @@ class SecurityManager:
                 public_key_pem.encode('utf-8')
             )
             self.peer_public_key = public_key
+            print(f"✅ 对等方公钥已设置")
             return True
         except Exception as e:
             print(f"❌ 设置对等方公钥失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False

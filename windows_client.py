@@ -60,30 +60,14 @@ class WindowsClipboardClient:
         self.max_reconnect_delay = 30
         self.last_discovery_time = 0
 
-        # Initialize file handler - 修复构造函数调用
+        # Initialize file handler - 修复：使用正确的构造函数
         try:
-            # 尝试不同的初始化方式
-            self.file_handler = FileHandler()
-            
-            # 如果FileHandler有属性设置方法，则设置它们
-            if hasattr(self.file_handler, 'temp_dir'):
-                self.file_handler.temp_dir = ClipboardConfig.get_temp_dir()
-            if hasattr(self.file_handler, 'security_mgr'):
-                self.file_handler.security_mgr = self.security_mgr
-            
-            # 如果有初始化方法，调用它
-            if hasattr(self.file_handler, 'initialize'):
-                self.file_handler.initialize(
-                    temp_dir=ClipboardConfig.get_temp_dir(),
-                    security_mgr=self.security_mgr
-                )
-            
-            print("✅ FileHandler 初始化成功")
-            
+            self.file_handler = FileHandler(
+                temp_dir=ClipboardConfig.get_temp_dir(),
+                security_mgr=self.security_mgr
+            )
         except Exception as e:
             print(f"❌ 初始化 FileHandler 失败: {e}")
-            print("🔧 使用备用文件处理器")
-            
             # 创建一个最小的备用对象
             class MinimalFileHandler:
                 def __init__(self):
@@ -121,7 +105,7 @@ class WindowsClipboardClient:
                     
                 def get_files_content_hash(self, files):
                     return None
-        
+            
             self.file_handler = MinimalFileHandler()
 
         # 尝试加载文件缓存
@@ -207,12 +191,76 @@ class WindowsClipboardClient:
     async def perform_key_exchange(self, websocket):
         """执行密钥交换"""
         try:
-            # 这里应该实现实际的密钥交换逻辑
-            # 暂时返回 True 作为占位符
-            print("🔑 密钥交换成功")
-            return True
+            print("🔑 开始密钥交换...")
+            
+            # Generate client's key pair if not already done
+            if not hasattr(self.security_mgr, 'private_key') or not self.security_mgr.private_key:
+                self.security_mgr.generate_key_pair()
+            
+            # Wait for server's public key
+            print("⏳ 等待服务器公钥...")
+            server_message = await asyncio.wait_for(websocket.recv(), timeout=15.0)
+            
+            if isinstance(server_message, bytes):
+                server_message = server_message.decode('utf-8')
+            
+            server_data = json.loads(server_message)
+            print(f"📨 收到服务器消息类型: {server_data.get('type')}")
+            
+            if server_data.get('type') != 'key_exchange_server':
+                print(f"❌ 收到无效的服务器密钥交换消息类型: {server_data.get('type')}")
+                return False
+            
+            server_public_key_pem = server_data.get('public_key')
+            if not server_public_key_pem:
+                print("❌ 服务器未提供公钥")
+                return False
+            
+            # Store server's public key
+            if not self.security_mgr.set_peer_public_key(server_public_key_pem):
+                print("❌ 无法设置服务器公钥")
+                return False
+            
+            print("✅ 已接收并设置服务器公钥")
+            
+            # Send client's public key to server
+            client_public_key = self.security_mgr.get_public_key_pem()
+            key_exchange_response = {
+                'type': 'key_exchange_client',
+                'public_key': client_public_key
+            }
+            
+            print("📤 发送客户端公钥给服务器...")
+            await websocket.send(json.dumps(key_exchange_response))
+            
+            # Wait for server confirmation
+            print("⏳ 等待服务器确认...")
+            confirmation_message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            
+            if isinstance(confirmation_message, bytes):
+                confirmation_message = confirmation_message.decode('utf-8')
+            
+            confirmation_data = json.loads(confirmation_message)
+            print(f"📨 收到确认消息: {confirmation_data}")
+            
+            if (confirmation_data.get('type') == 'key_exchange_complete' and 
+                confirmation_data.get('status') == 'success'):
+                print("🔑 密钥交换成功完成!")
+                return True
+            else:
+                print(f"❌ 密钥交换失败: {confirmation_data}")
+                return False
+                
+        except asyncio.TimeoutError:
+            print("❌ 密钥交换超时")
+            return False
+        except json.JSONDecodeError as e:
+            print(f"❌ 密钥交换响应JSON解析失败: {e}")
+            return False
         except Exception as e:
-            print(f"❌ 密钥交换失败: {e}")
+            print(f"❌ 密钥交换过程中出错: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def _set_windows_clipboard_file(self, file_path):
@@ -468,55 +516,81 @@ class WindowsClipboardClient:
             self.discovery.start_discovery(self.on_service_found)
 
     async def connect_and_sync(self):
-        """连接到服务器并同步剪贴板"""
+        """连接到服务器并开始同步"""
+        if not self.ws_url:
+            print("❌ 未找到服务器URL")
+            return False
+
         try:
+            print(f"🔗 正在连接到 {self.ws_url}")
+            self.connection_status = ConnectionStatus.CONNECTING
+            
             async with websockets.connect(
                 self.ws_url,
                 subprotocols=["binary"],
-                max_size= 10 * 1024 * 1024,
                 ping_interval=20,
-                ping_timeout=20
+                ping_timeout=20,
+                close_timeout=10
             ) as websocket:
-                if not await self.authenticate(websocket):
-                    print("❌ 身份验证失败，断开连接")
-                    self.connection_status = ConnectionStatus.DISCONNECTED
-                    return
-
-                if not await self.perform_key_exchange(websocket):
-                    print("❌ 密钥交换失败，断开连接")
-                    self.connection_status = ConnectionStatus.DISCONNECTED
-                    return
-
-                self.reconnect_delay = 3
-                self.connection_status = ConnectionStatus.CONNECTED
-                print("✅ 连接和密钥交换成功，开始同步剪贴板")
-
-                send_task = asyncio.create_task(self.send_clipboard_changes(websocket))
-                receive_task = asyncio.create_task(self.receive_clipboard_changes(websocket))
-
-                done, pending = await asyncio.wait(
-                    [send_task, receive_task],
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-
-                print("ℹ️ 同步任务结束，正在取消其他任务...")
-                for task in pending:
-                    task.cancel()
+                print("✅ WebSocket 连接已建立")
                 
-                if pending:
-                    await asyncio.wait(pending)
-
-                for task in done:
-                    if task.exception():
-                        print(f"❌ 同步任务异常退出: {task.exception()}")
-
-                print("ℹ️ 同步会话结束")
-                self.connection_status = ConnectionStatus.DISCONNECTED
-
+                # 1. Authentication
+                if not await self.authenticate(websocket):
+                    print("❌ 身份验证失败")
+                    return False
+                
+                # 2. Key Exchange  
+                if not await self.perform_key_exchange(websocket):
+                    print("❌ 密钥交换失败")
+                    return False
+                
+                print("🎉 连接建立成功，开始同步...")
+                self.connection_status = ConnectionStatus.CONNECTED
+                self.reconnect_delay = 3  # Reset reconnect delay on successful connection
+                
+                # Start clipboard monitoring and message handling
+                clipboard_task = asyncio.create_task(self.monitor_clipboard(websocket))
+                receive_task = asyncio.create_task(self.receive_messages(websocket))
+                
+                try:
+                    # Wait for either task to complete (usually due to error or disconnect)
+                    done, pending = await asyncio.wait(
+                        [clipboard_task, receive_task], 
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    # Cancel remaining tasks
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    
+                    # Check if any task had an exception
+                    for task in done:
+                        if task.exception():
+                            print(f"❌ 任务异常: {task.exception()}")
+                    
+                except Exception as e:
+                    print(f"❌ 连接处理过程中出错: {e}")
+                
+                return True
+                
+        except asyncio.TimeoutError:
+            print("❌ 连接超时")
+            return False
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"📴 连接已关闭: {e}")
+            return False
+        except websockets.exceptions.InvalidURI:
+            print(f"❌ 无效的服务器地址: {self.ws_url}")
+            return False
         except Exception as e:
-            print(f"❌ 连接过程中出现异常: {e}")
-            self.connection_status = ConnectionStatus.DISCONNECTED
-            raise
+            print(f"❌ 连接失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
         finally:
             self.connection_status = ConnectionStatus.DISCONNECTED
 
