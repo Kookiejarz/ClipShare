@@ -106,7 +106,7 @@ class ClipboardListener:
             print("✅ 服务器公钥已发送，等待客户端响应...")
             
             # Wait for client's public key response
-            client_response = await asyncio.wait_for(websocket.recv(), timeout=15.0)  # Increased timeout
+            client_response = await asyncio.wait_for(websocket.recv(), timeout=15.0)
             print(f"📨 收到客户端响应 ({len(client_response)} 字节)")
             
             if isinstance(client_response, bytes):
@@ -127,11 +127,19 @@ class ClipboardListener:
             print(f"📥 收到客户端公钥 ({len(client_public_key_pem)} 字符)")
             
             # Store client's public key in security manager
-            if not self.security_mgr.set_peer_public_key(client_public_key_pem):
+            success = self.security_mgr.set_peer_public_key(client_public_key_pem)
+            if not success:
                 print("❌ 无法设置客户端公钥")
                 return False
             
             print("✅ 客户端公钥已设置")
+            
+            # Verify shared key is established
+            if not hasattr(self.security_mgr, 'shared_key') or not self.security_mgr.shared_key:
+                print("❌ 共享密钥未建立")
+                return False
+            
+            print("✅ 共享密钥验证成功")
             
             # Send confirmation
             confirmation_message = {

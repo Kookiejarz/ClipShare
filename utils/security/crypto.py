@@ -1,7 +1,8 @@
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.backends import default_backend
 import os
 import base64
 import json
@@ -10,133 +11,116 @@ class SecurityManager:
     def __init__(self):
         self.private_key = None
         self.public_key = None
-        self.shared_key = None
         self.peer_public_key = None
+        self.shared_key = None
 
     def generate_key_pair(self):
-        """Generate new ECDH key pair"""
+        """Generate ECDH key pair"""
         try:
-            self.private_key = ec.generate_private_key(ec.SECP256R1())
+            self.private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
             self.public_key = self.private_key.public_key()
-            return self.public_key
+            print("🔑 密钥对生成成功")
         except Exception as e:
-            print(f"密钥对生成失败: {e}")
+            print(f"❌ 密钥对生成失败: {e}")
             raise
 
-    def has_shared_key(self):
-        """Check if shared key exists"""
-        return self.shared_key is not None
-
-    def serialize_public_key(self):
-        """Serialize public key for transmission"""
+    def get_public_key_pem(self) -> str:
+        """Get public key in PEM format"""
         if not self.public_key:
-            raise ValueError("No public key available")
+            raise ValueError("Public key not available")
         
-        serialized = self.public_key.public_bytes(
+        pem_bytes = self.public_key.public_key_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        return base64.b64encode(serialized).decode('utf-8')
+        return pem_bytes.decode('utf-8')
 
-    def deserialize_public_key(self, key_data):
-        """Deserialize a received public key"""
+    def set_peer_public_key(self, peer_public_key_pem: str) -> bool:
+        """Set the peer's public key and establish shared key"""
         try:
-            key_bytes = base64.b64decode(key_data)
-            peer_public_key = serialization.load_pem_public_key(key_bytes)
-            return peer_public_key
-        except Exception as e:
-            print(f"公钥反序列化失败: {e}")
-            raise
-
-
-    def generate_shared_key(self, peer_public_key):
-        """Generate shared key using ECDH"""
-        if not self.private_key:
-            raise ValueError("No private key available")
+            print(f"🔧 设置对等方公钥 ({len(peer_public_key_pem)} 字符)")
             
-        shared_key = self.private_key.exchange(ec.ECDH(), peer_public_key)
-        self.shared_key = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=None,
-            info=b'handshake data',
-        ).derive(shared_key)
-        print(f"🔑 ECDH密钥交换成功，前8字节: {self.shared_key[:8].hex()}")
-        return self.shared_key
-
-    def set_shared_key_from_password(self, password: str):
-        """Set shared key from a password (for testing)"""
-        import hashlib
-        self.shared_key = hashlib.sha256(password.encode()).digest()
-        print(f"🔑 从密码设置密钥，前8字节: {self.shared_key[:8].hex()}")
-        return self.shared_key
+            # Load peer's public key
+            peer_public_key = serialization.load_pem_public_key(
+                peer_public_key_pem.encode('utf-8'),
+                backend=default_backend()
+            )
+            self.peer_public_key = peer_public_key
+            print("✅ 对等方公钥加载成功")
+            
+            # Establish shared key using ECDH
+            if self.private_key and self.peer_public_key:
+                print("🔑 正在建立共享密钥...")
+                shared_secret = self.private_key.exchange(ec.ECDH(), self.peer_public_key)
+                print(f"🔧 共享秘密生成成功 ({len(shared_secret)} 字节)")
+                
+                # Derive a key from the shared secret using HKDF
+                self.shared_key = HKDF(
+                    algorithm=hashes.SHA256(),
+                    length=32,  # 256 bits for AES-256
+                    salt=None,
+                    info=b'clipshare-v1',
+                    backend=default_backend()
+                ).derive(shared_secret)
+                
+                print(f"🔑 共享密钥已建立 ({len(self.shared_key)} 字节)")
+                return True
+            else:
+                print(f"❌ 无法建立共享密钥：private_key={self.private_key is not None}, peer_public_key={self.peer_public_key is not None}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 设置对等方公钥失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     def encrypt_message(self, message: bytes) -> bytes:
-        """Encrypt a message using AES-256-GCM."""
+        """Encrypt message using shared key"""
         if not self.shared_key:
+            print(f"❌ 加密失败：shared_key={self.shared_key is not None}")
             raise ValueError("Shared key not established")
         
-        # 显示密钥信息
-        print(f"🔑 使用密钥 ({len(self.shared_key)} 字节) 加密，前8字节: {self.shared_key[:8].hex()}")
-        
-        print(f"🔒 正在加密 {len(message)} 字节数据...")
-        
         try:
-            aesgcm = AESGCM(self.shared_key)
-            nonce = os.urandom(12)
-            ciphertext = aesgcm.encrypt(nonce, message, None)
-            encrypted = nonce + ciphertext
-            print(f"✅ 加密成功! 加密后 {len(encrypted)} 字节")
-            return encrypted
+            # Use AES-GCM for authenticated encryption
+            iv = os.urandom(12)  # 96-bit IV for GCM
+            cipher = Cipher(algorithms.AES(self.shared_key), modes.GCM(iv), backend=default_backend())
+            encryptor = cipher.encryptor()
+            ciphertext = encryptor.update(message) + encryptor.finalize()
+            
+            # Return IV + tag + ciphertext
+            encrypted_data = iv + encryptor.tag + ciphertext
+            print(f"🔒 消息加密成功 ({len(message)} -> {len(encrypted_data)} 字节)")
+            return encrypted_data
+            
         except Exception as e:
-            print(f"❌ 加密失败: {e}")
+            print(f"❌ 消息加密失败: {e}")
             raise
 
-    def decrypt_message(self, encrypted_data):
-        """Decrypt a message using AES-256-GCM."""
+    def decrypt_message(self, encrypted_data: bytes) -> bytes:
+        """Decrypt message using shared key"""
         if not self.shared_key:
+            print(f"❌ 解密失败：shared_key={self.shared_key is not None}")
             raise ValueError("Shared key not established")
         
-        # 显示密钥信息
-        print(f"🔑 使用密钥 ({len(self.shared_key)} 字节) 解密，前8字节: {self.shared_key[:8].hex()}")
-        
-        # 确保数据是二进制格式
-        if not isinstance(encrypted_data, bytes):
-            print(f"⚠️ 将 {type(encrypted_data)} 转换为 bytes")
-            try:
-                if isinstance(encrypted_data, str):
-                    if encrypted_data.startswith('{'):
-                        print("⚠️ 跳过JSON格式数据，不尝试解密")
-                        raise ValueError("JSON string cannot be decrypted directly")
-                    
-                    encrypted_data = encrypted_data.encode('utf-8')
-                else:
-                    raise TypeError(f"无法处理的数据类型: {type(encrypted_data)}")
-            except Exception as e:
-                print(f"❌ 数据类型转换失败: {e}")
-                raise
-        
         try:
-            # 检查数据格式
-            if len(encrypted_data) <= 12:
-                raise ValueError(f"数据太短: {len(encrypted_data)} 字节")
-                
-            # 打印详细的nonce和密文信息用于调试
-            nonce = encrypted_data[:12]
-            ciphertext = encrypted_data[12:]
-            print(f"🔍 Nonce ({len(nonce)} 字节): {nonce.hex()[:24]}...")
-            print(f"🔍 密文 ({len(ciphertext)} 字节): {ciphertext.hex()[:24] if len(ciphertext) >= 12 else ciphertext.hex()}...")
+            if len(encrypted_data) < 28:  # 12 (IV) + 16 (tag) minimum
+                raise ValueError(f"Encrypted data too short: {len(encrypted_data)} bytes")
             
-            aesgcm = AESGCM(self.shared_key)
-            decrypted_data = aesgcm.decrypt(nonce, ciphertext, None)
+            # Extract IV, tag, and ciphertext
+            iv = encrypted_data[:12]
+            tag = encrypted_data[12:28]
+            ciphertext = encrypted_data[28:]
             
-            # 打印解密成功信息
-            print(f"✅ 解密成功! 数据长度: {len(decrypted_data)} 字节")
+            cipher = Cipher(algorithms.AES(self.shared_key), modes.GCM(iv, tag), backend=default_backend())
+            decryptor = cipher.decryptor()
+            
+            decrypted_data = decryptor.update(ciphertext) + decryptor.finalize()
+            print(f"🔓 消息解密成功 ({len(encrypted_data)} -> {len(decrypted_data)} 字节)")
             return decrypted_data
+            
         except Exception as e:
-            print(f"❌ 解密失败: {e}")
-            print(f"数据长度: {len(encrypted_data)} 字节")
-            print(f"数据预览 (十六进制): {encrypted_data[:20].hex()}")
+            print(f"❌ 消息解密失败: {e}")
             raise
 
     async def perform_key_exchange(self, send_data_func, receive_data_func):
@@ -188,33 +172,4 @@ class SecurityManager:
                 
         except Exception as e:
             print(f"❌ 密钥交换失败: {e}")
-            return False
-
-    def get_public_key_pem(self) -> str:
-        """获取公钥的PEM格式字符串"""
-        if not self.private_key:
-            raise ValueError("私钥未生成")
-        
-        public_key = self.private_key.public_key()
-        pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        return pem.decode('utf-8')
-    
-    def set_peer_public_key(self, public_key_pem: str) -> bool:
-        """设置对等方的公钥"""
-        try:
-            from cryptography.hazmat.primitives import serialization
-            
-            public_key = serialization.load_pem_public_key(
-                public_key_pem.encode('utf-8')
-            )
-            self.peer_public_key = public_key
-            print(f"✅ 对等方公钥已设置")
-            return True
-        except Exception as e:
-            print(f"❌ 设置对等方公钥失败: {e}")
-            import traceback
-            traceback.print_exc()
             return False
