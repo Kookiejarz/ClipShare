@@ -60,14 +60,30 @@ class WindowsClipboardClient:
         self.max_reconnect_delay = 30
         self.last_discovery_time = 0
 
-        # Initialize file handler - 修复：使用正确的构造函数
+        # Initialize file handler - 修复构造函数调用
         try:
-            self.file_handler = FileHandler(
-                temp_dir=ClipboardConfig.get_temp_dir(),
-                security_mgr=self.security_mgr
-            )
+            # 尝试不同的初始化方式
+            self.file_handler = FileHandler()
+            
+            # 如果FileHandler有属性设置方法，则设置它们
+            if hasattr(self.file_handler, 'temp_dir'):
+                self.file_handler.temp_dir = ClipboardConfig.get_temp_dir()
+            if hasattr(self.file_handler, 'security_mgr'):
+                self.file_handler.security_mgr = self.security_mgr
+            
+            # 如果有初始化方法，调用它
+            if hasattr(self.file_handler, 'initialize'):
+                self.file_handler.initialize(
+                    temp_dir=ClipboardConfig.get_temp_dir(),
+                    security_mgr=self.security_mgr
+                )
+            
+            print("✅ FileHandler 初始化成功")
+            
         except Exception as e:
             print(f"❌ 初始化 FileHandler 失败: {e}")
+            print("🔧 使用备用文件处理器")
+            
             # 创建一个最小的备用对象
             class MinimalFileHandler:
                 def __init__(self):
@@ -105,7 +121,7 @@ class WindowsClipboardClient:
                     
                 def get_files_content_hash(self, files):
                     return None
-            
+        
             self.file_handler = MinimalFileHandler()
 
         # 尝试加载文件缓存
