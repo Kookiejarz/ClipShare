@@ -29,7 +29,8 @@ class SecurityManager:
         if not self.public_key:
             raise ValueError("Public key not available")
         
-        pem_bytes = self.public_key.public_key_bytes(
+        # Fixed: Use public_bytes() instead of public_key_bytes()
+        pem_bytes = self.public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
