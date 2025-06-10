@@ -354,11 +354,16 @@ class WindowsClipboardClient:
                 'platform': 'windows'
             }
 
-            print(f"🔑 {'首次连接' if is_first_time else '已注册设备'} ID: {self.device_id}")
+            if is_first_time:
+                print(f"🔗 首次连接设备 ID: {self.device_id}")
+                print("正在请求与服务器配对...")
+            else:
+                print(f"🔑 已注册设备 ID: {self.device_id}")
+                
             await websocket.send(json.dumps(auth_info))
 
             # Wait for response with timeout
-            auth_response_raw = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            auth_response_raw = await asyncio.wait_for(websocket.recv(), timeout=30.0)  # Longer timeout for pairing
 
             if isinstance(auth_response_raw, bytes):
                 auth_response = auth_response_raw.decode('utf-8')
@@ -371,40 +376,33 @@ class WindowsClipboardClient:
             if status == 'authorized':
                 print(f"✅ 身份验证成功! 服务器: {response_data.get('server_id', '未知')}")
                 return True
-            elif status == 'first_authorized':
+            elif status == 'pairing_accepted':
                 token = response_data.get('token')
                 if token:
                     self._save_device_token(token)
                     self.device_token = token
-                    print(f"🆕 设备已授权并获取令牌")
+                    print(f"🎉 设备配对成功并获取授权令牌!")
                     return True
                 else:
-                    print(f"❌ 服务器在首次授权时未提供令牌")
+                    print(f"❌ 服务器在配对成功时未提供令牌")
                     return False
+            elif status == 'pairing_rejected':
+                print(f"❌ 配对被服务器拒绝: {response_data.get('reason', '未知原因')}")
+                return False
+            elif status == 'pairing_expired':
+                print(f"⏰ 配对请求超时: {response_data.get('reason', '未知原因')}")
+                print("请重新尝试连接并确保及时在服务器端确认配对")
+                return False
             else:
                 reason = response_data.get('reason', '未知原因')
                 print(f"❌ 身份验证失败: {reason}")
-                # If we weren't connecting for the first time, our token might be invalid.
-                if not is_first_time:
-                    print("ℹ️ 本地令牌可能已失效，将尝试清除并重新注册...")
-                    try:
-                        token_path = self._get_token_path()
-                        if token_path.exists():
-                            token_path.unlink()
-                            print(f"🗑️ 已删除本地令牌文件: {token_path}")
-                        self.device_token = None # Clear token in memory
-                    except Exception as e:
-                        print(f"⚠️ 删除本地令牌文件失败: {e}")
                 return False
+                
         except asyncio.TimeoutError:
-             print("❌ 等待身份验证响应超时")
-             return False
-        except json.JSONDecodeError:
-             print("❌ 无效的身份验证响应格式")
-             return False
+            print("❌ 等待配对响应超时 (可能需要在服务器端手动确认)")
+            return False
         except Exception as e:
             print(f"❌ 身份验证过程中出错: {e}")
-            traceback.print_exc()
             return False
 
     def _get_clipboard_file_paths(self):

@@ -13,6 +13,8 @@ from pathlib import Path
 import hashlib
 from handlers.file_handler import FileHandler
 from config import ClipboardConfig # Import config
+from utils.security.pairing import PairingManager, PairingStatus
+import threading
 
 class ClipboardListener:
     """剪贴板监听和同步服务器"""
@@ -26,6 +28,8 @@ class ClipboardListener:
         self.last_remote_content_hash = None
         self.last_remote_update_time = 0
         self.ignore_clipboard_until = 0 # Timestamp until which local clipboard changes are ignored
+        self.pairing_mgr = PairingManager(timeout_seconds=60)
+        self.pairing_mgr.set_pairing_callback(self._on_pairing_request)
 
     def _init_basic_components(self):
         """初始化基础组件"""
@@ -73,6 +77,30 @@ class ClipboardListener:
 
     # Removed load_file_cache as it's called in _init_file_handling
 
+    def _on_pairing_request(self, request):
+        """Handle pairing request - show notification to user"""
+        print(f"\n{'='*60}")
+        print(f"🔗 新设备请求配对:")
+        print(f"   设备名称: {request.device_name}")
+        print(f"   平台: {request.platform}")
+        print(f"   IP地址: {request.ip_address}")
+        print(f"   设备ID: {request.device_id}")
+        print(f"{'='*60}")
+        print(f"是否允许此设备连接? (输入 'y' 接受, 'n' 拒绝)")
+        
+        # Start input thread to not block async operations
+        def get_user_input():
+            try:
+                choice = input().strip().lower()
+                if choice in ['y', 'yes', 'accept', '是', '接受']:
+                    self.pairing_mgr.accept_pairing(request.device_id)
+                else:
+                    self.pairing_mgr.reject_pairing(request.device_id)
+            except:
+                self.pairing_mgr.reject_pairing(request.device_id)
+                
+        threading.Thread(target=get_user_input, daemon=True).start()
+
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
         device_id = None
@@ -81,33 +109,57 @@ class ClipboardListener:
             # --- Authentication ---
             auth_message = await websocket.recv()
             try:
-                # ... existing authentication logic ...
-                # (Ensure device_id is set correctly after successful auth)
                 if isinstance(auth_message, str):
                     auth_info = json.loads(auth_message)
                 else:
                     auth_info = json.loads(auth_message.decode('utf-8'))
 
-                device_id = auth_info.get('identity', f'unknown-{client_ip}') # Use IP if ID missing
+                device_id = auth_info.get('identity', f'unknown-{client_ip}')
                 signature = auth_info.get('signature', '')
                 is_first_time = auth_info.get('first_time', False)
 
                 print(f"📱 设备 {device_id} ({client_ip}) 尝试连接")
 
                 if is_first_time:
-                    print(f"🆕 设备 {device_id} 首次连接，授权中...")
-                    token = self.auth_mgr.authorize_device(device_id, {
-                        "name": auth_info.get("device_name", "未命名设备"),
-                        "platform": auth_info.get("platform", "未知平台"),
-                        "ip": client_ip # Store IP for info
-                    })
-                    await websocket.send(json.dumps({
-                        'status': 'first_authorized',
-                        'server_id': 'mac-server',
-                        'token': token
-                    }))
-                    print(f"✅ 已授权设备 {device_id} 并发送令牌")
+                    print(f"🆕 设备 {device_id} 首次连接，需要配对...")
+                    
+                    # Request pairing
+                    pairing_request = await self.pairing_mgr.request_pairing(
+                        device_id, auth_info, client_ip
+                    )
+                    
+                    # Wait for user decision
+                    pairing_result = await self.pairing_mgr.wait_for_pairing_result(device_id)
+                    
+                    if pairing_result == PairingStatus.ACCEPTED:
+                        # Generate and send token
+                        token = self.auth_mgr.authorize_device(device_id, {
+                            "name": auth_info.get("device_name", "未命名设备"),
+                            "platform": auth_info.get("platform", "未知平台"),
+                            "ip": client_ip
+                        })
+                        await websocket.send(json.dumps({
+                            'status': 'pairing_accepted',
+                            'server_id': 'mac-server',
+                            'token': token
+                        }))
+                        print(f"✅ 设备 {device_id} 配对成功并已授权")
+                    elif pairing_result == PairingStatus.REJECTED:
+                        await websocket.send(json.dumps({
+                            'status': 'pairing_rejected',
+                            'reason': 'User rejected pairing request'
+                        }))
+                        print(f"❌ 设备 {device_id} 配对被拒绝")
+                        return
+                    else:  # EXPIRED
+                        await websocket.send(json.dumps({
+                            'status': 'pairing_expired',
+                            'reason': 'Pairing request timed out'
+                        }))
+                        print(f"⏰ 设备 {device_id} 配对请求超时")
+                        return
                 else:
+                    # Existing device authentication
                     print(f"🔐 验证设备 {device_id} 的签名")
                     is_valid = self.auth_mgr.validate_device(device_id, signature)
                     if not is_valid:
