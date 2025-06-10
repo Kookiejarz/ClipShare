@@ -5,6 +5,7 @@ import base64
 import asyncio
 import os
 import time
+import traceback
 from utils.platform_config import IS_MACOS, IS_WINDOWS
 from utils.message_format import ClipMessage, MessageType
 from config import ClipboardConfig
@@ -307,3 +308,216 @@ class FileHandler:
             print(f"❌ 处理文本消息时出错: {e}")
             traceback.print_exc()
             return last_content_hash, 0
+
+    async def process_clipboard_content(self, text: str, current_time: float, 
+                                      last_content_hash: str, last_update_time: float,
+                                      broadcast_fn) -> tuple[str, float, bool]:
+        """
+        处理剪贴板文本内容并决定是否发送
+        Returns: (new_hash, new_time, update_sent)
+        """
+        try:
+            if self._looks_like_temp_file_path(text):
+                return last_content_hash, last_update_time, False
+            
+            # Calculate content hash
+            content_hash = hashlib.md5(text.encode()).hexdigest()
+            
+            # Check if content has changed
+            if content_hash == last_content_hash:
+                return last_content_hash, last_update_time, False
+            
+            # Check minimum time interval between updates
+            if current_time - last_update_time < ClipboardConfig.MIN_PROCESS_INTERVAL:
+                return last_content_hash, last_update_time, False
+            
+            # Create and send text message
+            message = {
+                'type': MessageType.TEXT,
+                'content': text,
+                'timestamp': current_time
+            }
+            
+            # Broadcast to all clients (broadcast_fn will check if clients exist)
+            message_data = json.dumps(message).encode('utf-8')
+            await broadcast_fn(message_data)
+            
+            # Display sent text (truncated)
+            display_text = text[:ClipboardConfig.MAX_DISPLAY_LENGTH] + ("..." if len(text) > ClipboardConfig.MAX_DISPLAY_LENGTH else "")
+            print(f"📤 已发送文本: \"{display_text}\"")
+            
+            return content_hash, current_time, True
+            
+        except Exception as e:
+            print(f"❌ 处理剪贴板文本内容时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return last_content_hash, last_update_time, False
+
+    async def handle_clipboard_files(self, file_paths: list, last_content_hash: str,
+                                   broadcast_fn) -> tuple[str, bool]:
+        """
+        处理剪贴板文件并发送文件信息
+        Returns: (new_hash, update_sent)
+        """
+        try:
+            if not file_paths:
+                return last_content_hash, False
+            
+            # Calculate combined hash for all files
+            files_hash = self.get_files_content_hash(file_paths)
+            if not files_hash:
+                return last_content_hash, False
+            
+            # Check if files have changed
+            if files_hash == last_content_hash:
+                return last_content_hash, False
+            
+            # Create file info message
+            file_info_list = []
+            for file_path in file_paths:
+                path_obj = Path(file_path)
+                if path_obj.exists() and path_obj.is_file():
+                    file_info = {
+                        'filename': path_obj.name,
+                        'size': path_obj.stat().st_size,
+                        'path': str(path_obj),
+                        'hash': ClipMessage.calculate_file_hash(str(path_obj))
+                    }
+                    file_info_list.append(file_info)
+            
+            if not file_info_list:
+                return last_content_hash, False
+            
+            # Send file info message (broadcast_fn will check if clients exist)
+            message = {
+                'type': MessageType.FILE,
+                'files': file_info_list,
+                'timestamp': time.time()
+            }
+            
+            message_data = json.dumps(message).encode('utf-8')
+            await broadcast_fn(message_data)
+            
+            # Display sent files
+            file_names = [info['filename'] for info in file_info_list]
+            print(f"📤 已发送文件信息: {', '.join(file_names)}")
+            
+            return files_hash, True
+            
+        except Exception as e:
+            print(f"❌ 处理剪贴板文件时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return last_content_hash, False
+
+    def get_files_content_hash(self, file_paths: list) -> str:
+        """计算多个文件的组合哈希值"""
+        try:
+            if not file_paths:
+                return ""
+            
+            hasher = hashlib.md5()
+            for file_path in sorted(file_paths):  # Sort for consistent hash
+                path_obj = Path(file_path)
+                if path_obj.exists() and path_obj.is_file():
+                    # Add file path and modification time to hash
+                    hasher.update(str(path_obj).encode())
+                    hasher.update(str(path_obj.stat().st_mtime).encode())
+                    # Could also add file size for more uniqueness
+                    hasher.update(str(path_obj.stat().st_size).encode())
+            
+            return hasher.hexdigest()
+            
+        except Exception as e:
+            print(f"❌ 计算文件哈希时出错: {e}")
+            return ""
+
+    def add_to_file_cache(self, file_hash: str, file_path: str):
+        """添加文件到缓存"""
+        try:
+            self.file_cache[file_hash] = {
+                'path': file_path,
+                'timestamp': time.time(),
+                'filename': Path(file_path).name
+            }
+            self.save_file_cache()
+        except Exception as e:
+            print(f"❌ 添加文件缓存失败: {e}")
+
+    async def handle_received_files(self, message: dict, send_encrypted_fn, sender_websocket=None):
+        """处理接收到的文件信息，请求缺失的文件"""
+        try:
+            files = message.get('files', [])
+            if not files:
+                print("⚠️ 收到空的文件列表")
+                return
+            
+            for file_info in files:
+                filename = file_info.get('filename', 'unknown')
+                file_hash = file_info.get('hash', '')
+                file_size = file_info.get('size', 0)
+                
+                print(f"📄 收到文件信息: {filename} ({file_size/1024/1024:.1f}MB)")
+                
+                # Check if we already have this file
+                if file_hash in self.file_cache:
+                    cached_path = Path(self.file_cache[file_hash]['path'])
+                    if cached_path.exists():
+                        print(f"✅ 文件 {filename} 已存在缓存中，跳过下载")
+                        continue
+                
+                # Request the file
+                request_message = {
+                    'type': MessageType.FILE_REQUEST,
+                    'filename': filename,
+                    'hash': file_hash,
+                    'path': file_info.get('path', '')
+                }
+                
+                request_data = json.dumps(request_message).encode('utf-8')
+                await send_encrypted_fn(request_data)
+                print(f"📨 已请求文件: {filename}")
+                
+        except Exception as e:
+            print(f"❌ 处理文件信息时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def set_clipboard_file(self, file_path: Path) -> int | None:
+        """设置文件到剪贴板，返回变更计数或None表示失败"""
+        if not IS_MACOS:
+            print("⚠️ 非macOS系统，无法设置文件到剪贴板")
+            return None
+        
+        try:
+            # Use AppKit from main thread via performSelectorOnMainThread
+            path_str = str(file_path.resolve())
+            
+            # Use the PasteboardSetter class to set clipboard on main thread
+            result = AppKit.NSThread.isMainThread()
+            if result:  # Already on main thread
+                result_str = PasteboardSetter.setFileURL_(path_str)
+            else:  # Need to dispatch to main thread
+                # Use performSelectorOnMainThread to execute on main thread
+                result_str = objc.callmethod(
+                    PasteboardSetter, 
+                    "performSelectorOnMainThread:withObject:waitUntilDone:",
+                    "setFileURL:",
+                    path_str,
+                    True  # Wait until done
+                )
+            
+            # Parse result
+            if isinstance(result_str, str) and '|' in result_str:
+                success, change_count = result_str.split('|', 1)
+                if success == '1':
+                    return int(change_count)
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ 设置剪贴板文件失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None

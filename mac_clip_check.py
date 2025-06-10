@@ -345,9 +345,102 @@ class ClipboardListener:
             self.is_receiving = False # Release lock
 
 
+    async def process_clipboard(self) -> bool:
+        """
+        处理本地剪贴板内容变化, 发送给客户端.
+        Returns True if an update was sent, False otherwise.
+        """
+        # Check if there are any connected clients before processing
+        if not self.connected_clients:
+            # print("ℹ️ 没有连接的客户端，跳过剪贴板处理") # Uncomment for debugging
+            return False
+        
+        types = self.pasteboard.types()
+        sent_update = False
+        try:
+            # --- Handle Files First (if present) ---
+            if AppKit.NSPasteboardTypeFileURL in types:
+                file_urls = []
+                # Correctly iterate through pasteboard items to get file URLs
+                for item in self.pasteboard.pasteboardItems():
+                    url_str = item.stringForType_(AppKit.NSPasteboardTypeFileURL)
+                    if url_str:
+                        # Convert file URL string to path
+                        url = AppKit.NSURL.URLWithString_(url_str)
+                        if url and url.isFileURL():
+                             file_path = url.path()
+                             if file_path and Path(file_path).exists(): # Check existence
+                                  file_urls.append(file_path)
+                             else:
+                                  print(f"⚠️ 剪贴板中的文件路径无效或不存在: {file_path}")
+
+                if file_urls:
+                    # Use FileHandler to create and send file info message
+                    new_hash, update_sent = await self.file_handler.handle_clipboard_files(
+                        file_urls,
+                        self.last_content_hash,
+                        self.broadcast_encrypted_data # Pass broadcast function
+                    )
+                    if update_sent:
+                        self.last_content_hash = new_hash
+                        self.last_update_time = time.time()
+                        sent_update = True
+                        # Initiate the actual file transfer after sending info
+                        print("🔄 准备主动传输文件内容...")
+                        for file_path in file_urls:
+                             # Pass broadcast function for sending chunks
+                             await self.file_handler.handle_file_transfer(
+                                  file_path, self.broadcast_encrypted_data
+                             )
+                    return sent_update # Return immediately after handling files
+
+            # --- Handle Text (if no files were handled) ---
+            if AppKit.NSPasteboardTypeString in types:
+                text = self.pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
+                if text: # Ensure text is not empty
+                    # Anti-loop check: Compare with last received remote hash
+                    content_hash = hashlib.md5(text.encode()).hexdigest()
+                    if (self.last_remote_content_hash == content_hash and
+                        time.time() - self.last_remote_update_time < ClipboardConfig.UPDATE_DELAY * 2): # Wider window for remote check
+                        # print("⏭️ 跳过发送回环内容 (与远程接收一致)") # Less verbose
+                        return False # Don't send back recently received content
+
+                    # Use FileHandler to process and send text message
+                    current_time = time.time()
+                    new_hash, new_time, update_sent = await self.file_handler.process_clipboard_content(
+                        text,
+                        current_time,
+                        self.last_content_hash,
+                        self.last_update_time,
+                        self.broadcast_encrypted_data # Pass broadcast function
+                    )
+                    if update_sent:
+                        self.last_content_hash = new_hash
+                        self.last_update_time = new_time
+                        sent_update = True
+                    return sent_update
+
+            # --- Handle Images (Optional, Placeholder) ---
+            if AppKit.NSPasteboardTypePNG in types:
+                print("⚠️ 图片同步暂不支持")
+                # Future: Extract PNG data, use file handler logic
+                # png_data = self.pasteboard.dataForType_(AppKit.NSPasteboardTypePNG)
+                # if png_data:
+                #    # Save to temp file, use handle_clipboard_files?
+                #    pass
+
+        except Exception as e:
+            print(f"❌ 处理剪贴板内容时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+        return sent_update # Return whether an update was sent
+
+
     async def broadcast_encrypted_data(self, data_to_encrypt: bytes, exclude_client=None):
         """Encrypts and broadcasts data to all connected clients, excluding one if specified."""
         if not self.connected_clients:
+            # print("ℹ️ 没有连接的客户端，跳过广播") # Uncomment for debugging
             return
 
         try:
@@ -363,7 +456,7 @@ class ClipboardListener:
             # print("ℹ️ 没有需要广播的客户端") # Less verbose
             return
 
-        # print(f"📢 广播数据 ({len(encrypted_data)} 字节) 到 {broadcast_count} 个客户端") # Less verbose
+        print(f"📢 广播数据到 {broadcast_count} 个客户端") # Show when actually broadcasting
 
         tasks = []
         for client in active_clients:
@@ -449,6 +542,11 @@ class ClipboardListener:
             try:
                 current_time = time.time()
 
+                # Skip processing if no clients are connected
+                if not self.connected_clients:
+                    await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
+                    continue
+
                 # Ignore if we are currently processing a received update
                 if self.is_receiving:
                     await asyncio.sleep(0.1) # Short sleep while receiving
@@ -462,7 +560,7 @@ class ClipboardListener:
                 # Check if enough time has passed since the last processing
                 time_since_process = current_time - last_processed_time
                 if time_since_process < ClipboardConfig.MIN_PROCESS_INTERVAL:
-                    await asyncio.sleep(0.1) # Wait if processing too frequently
+                    await asyncio.sleep(0.1) # Wait if processing too频繁
                     continue
 
                 # Check for actual clipboard change count
@@ -486,114 +584,6 @@ class ClipboardListener:
                 traceback.print_exc()
                 await asyncio.sleep(1) # Longer sleep on error
 
-
-    async def process_clipboard(self) -> bool:
-        """
-        处理本地剪贴板内容变化, 发送给客户端.
-        Returns True if an update was sent, False otherwise.
-        """
-        types = self.pasteboard.types()
-        sent_update = False
-        try:
-            # --- Handle Files First (if present) ---
-            if AppKit.NSPasteboardTypeFileURL in types:
-                file_urls = []
-                # Correctly iterate through pasteboard items to get file URLs
-                for item in self.pasteboard.pasteboardItems():
-                    url_str = item.stringForType_(AppKit.NSPasteboardTypeFileURL)
-                    if url_str:
-                        # Convert file URL string to path
-                        url = AppKit.NSURL.URLWithString_(url_str)
-                        if url and url.isFileURL():
-                             file_path = url.path()
-                             if file_path and Path(file_path).exists(): # Check existence
-                                  file_urls.append(file_path)
-                             else:
-                                  print(f"⚠️ 剪贴板中的文件路径无效或不存在: {file_path}")
-
-                if file_urls:
-                    # Use FileHandler to create and send file info message
-                    new_hash, update_sent = await self.file_handler.handle_clipboard_files(
-                        file_urls,
-                        self.last_content_hash,
-                        self.broadcast_encrypted_data # Pass broadcast function
-                    )
-                    if update_sent:
-                        self.last_content_hash = new_hash
-                        self.last_update_time = time.time()
-                        sent_update = True
-                        # Initiate the actual file transfer after sending info
-                        print("🔄 准备主动传输文件内容...")
-                        for file_path in file_urls:
-                             # Pass broadcast function for sending chunks
-                             await self.file_handler.handle_file_transfer(
-                                  file_path, self.broadcast_encrypted_data
-                             )
-                    return sent_update # Return immediately after handling files
-
-            # --- Handle Text (if no files were handled) ---
-            if AppKit.NSPasteboardTypeString in types:
-                text = self.pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
-                if text: # Ensure text is not empty
-                    # Anti-loop check: Compare with last received remote hash
-                    content_hash = hashlib.md5(text.encode()).hexdigest()
-                    if (self.last_remote_content_hash == content_hash and
-                        time.time() - self.last_remote_update_time < ClipboardConfig.UPDATE_DELAY * 2): # Wider window for remote check
-                        # print("⏭️ 跳过发送回环内容 (与远程接收一致)") # Less verbose
-                        return False # Don't send back recently received content
-
-                    # Use FileHandler to process and send text message
-                    current_time = time.time()
-                    new_hash, new_time, update_sent = await self.file_handler.process_clipboard_content(
-                        text,
-                        current_time,
-                        self.last_content_hash,
-                        self.last_update_time,
-                        self.broadcast_encrypted_data # Pass broadcast function
-                    )
-                    if update_sent:
-                        self.last_content_hash = new_hash
-                        self.last_update_time = new_time
-                        sent_update = True
-                    return sent_update
-
-            # --- Handle Images (Optional, Placeholder) ---
-            if AppKit.NSPasteboardTypePNG in types:
-                print("⚠️ 图片同步暂不支持")
-                # Future: Extract PNG data, use file handler logic
-                # png_data = self.pasteboard.dataForType_(AppKit.NSPasteboardTypePNG)
-                # if png_data:
-                #    # Save to temp file, use handle_clipboard_files?
-                #    pass
-
-        except Exception as e:
-            print(f"❌ 处理剪贴板内容时出错: {e}")
-            import traceback
-            traceback.print_exc()
-
-        return sent_update # Return whether an update was sent
-
-
-    async def perform_key_exchange(self, websocket):
-        """Perform key exchange with client"""
-        # Generate keys just before exchange if not already done
-        if not self.security_mgr.private_key:
-             self.security_mgr.generate_key_pair()
-
-        # Create wrapper functions for sending/receiving through websocket
-        async def send_to_websocket(data):
-            await websocket.send(data)
-
-        async def receive_from_websocket():
-            return await websocket.recv()
-
-        # Use the SecurityManager's key exchange implementation
-        return await self.security_mgr.perform_key_exchange(
-            send_to_websocket,
-            receive_from_websocket
-        )
-
-    # Removed _looks_like_temp_file_path (moved to FileHandler)
 
     def stop(self):
         """Signals the server and related tasks to stop."""
