@@ -52,8 +52,9 @@ class FileHandler:
         self.file_cache = {}
         self._init_temp_dir()
         self.load_file_cache()
-        self.chunk_size = ClipboardConfig.CHUNK_SIZE # Use config
         self.pending_transfers = {}  # Track ongoing chunked transfers
+        self._transfer_semaphore = asyncio.Semaphore(ClipboardConfig.MAX_CONCURRENT_CHUNKS)
+        self._json_cache = {}  # Cache for repeated JSON strings
 
     def _init_temp_dir(self):
         """初始化临时目录"""
@@ -69,49 +70,99 @@ class FileHandler:
         return False
 
     async def handle_file_transfer(self, file_path: str, send_encrypted_fn):
-        """处理文件传输（自动分块大文件）"""
+        """处理文件传输（优化的高速传输）"""
         path_obj = Path(file_path)
-        MAX_CHUNK_SIZE = self.chunk_size # Use instance chunk size
-
         if not path_obj.exists() or not path_obj.is_file():
             print(f"⚠️ 文件不存在或无效: {file_path}")
             return False
 
         try:
             file_size = path_obj.stat().st_size
-            total_chunks = (file_size + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
-            print(f"📤 开始传输文件: {path_obj.name} ({file_size/1024/1024:.1f}MB, {total_chunks}块)")
+            
+            # 根据文件大小选择最优的块大小和延迟
+            if file_size >= ClipboardConfig.LARGE_FILE_THRESHOLD:
+                chunk_size = ClipboardConfig.CHUNK_SIZE_LARGE
+                network_delay = ClipboardConfig.NETWORK_DELAY_LARGE
+                transfer_type = "大文件模式"
+            else:
+                chunk_size = ClipboardConfig.CHUNK_SIZE_SMALL
+                network_delay = ClipboardConfig.NETWORK_DELAY_SMALL
+                transfer_type = "小文件模式"
+            
+            total_chunks = (file_size + chunk_size - 1) // chunk_size
+            print(f"📤 开始传输文件: {path_obj.name} ({file_size/1024/1024:.1f}MB, {total_chunks}块, {transfer_type})")
 
-            # 发送文件开始消息 (optional, could be part of the first chunk)
-            # Consider if a separate start message is needed or if info can be in first chunk
-
-            # 逐块读取并发送文件
+            # 预读取所有块数据以避免磁盘I/O阻塞网络传输
+            chunks_data = []
             with open(path_obj, 'rb') as f:
                 for chunk_index in range(total_chunks):
-                    chunk_data = f.read(MAX_CHUNK_SIZE)
+                    chunk_data = f.read(chunk_size)
                     if not chunk_data:
                         break
+                    chunks_data.append((chunk_index, chunk_data))
 
-                    chunk_msg = {
-                        'type': MessageType.FILE_RESPONSE,
-                        'filename': path_obj.name,
-                        'exists': True,
-                        'chunk_data': base64.b64encode(chunk_data).decode('utf-8'),
-                        'chunk_index': chunk_index,
-                        'total_chunks': total_chunks,
-                        'chunk_hash': hashlib.md5(chunk_data).hexdigest(),
-                        'file_hash': ClipMessage.calculate_file_hash(str(path_obj)) if chunk_index == 0 else None # Send full hash only once
-                    }
+            # 异步发送块（带并发控制）
+            transfer_start = time.time()
+            sent_chunks = 0
+            
+            async def send_chunk(chunk_index: int, chunk_data: bytes):
+                nonlocal sent_chunks
+                async with self._transfer_semaphore:
+                    # 优化：大文件使用直接二进制传输，小文件使用base64
+                    if file_size >= ClipboardConfig.LARGE_FILE_THRESHOLD:
+                        # 大文件：分离元数据和二进制数据以减少JSON开销
+                        chunk_meta = {
+                            'type': MessageType.FILE_RESPONSE,
+                            'filename': path_obj.name,
+                            'exists': True,
+                            'chunk_index': chunk_index,
+                            'total_chunks': total_chunks,
+                            'chunk_size': len(chunk_data),
+                            'chunk_hash': hashlib.md5(chunk_data).hexdigest(),
+                            'file_hash': ClipMessage.calculate_file_hash(str(path_obj)) if chunk_index == 0 else None,
+                            'binary_mode': True
+                        }
+                        # 发送元数据，然后发送原始二进制数据
+                        await send_encrypted_fn(json.dumps(chunk_meta).encode('utf-8'))
+                        await send_encrypted_fn(chunk_data)  # 直接发送二进制数据
+                        return  # 跳过下面的常规发送
+                    else:
+                        # 小文件：继续使用base64编码
+                        chunk_msg = {
+                            'type': MessageType.FILE_RESPONSE,
+                            'filename': path_obj.name,
+                            'exists': True,
+                            'chunk_data': base64.b64encode(chunk_data).decode('utf-8'),
+                            'chunk_index': chunk_index,
+                            'total_chunks': total_chunks,
+                            'chunk_hash': hashlib.md5(chunk_data).hexdigest(),
+                            'file_hash': ClipMessage.calculate_file_hash(str(path_obj)) if chunk_index == 0 else None,
+                            'binary_mode': False
+                        }
 
-                    # 显示进度
-                    progress = self._format_progress(chunk_index + 1, total_chunks)
-                    print(f"\r📤 传输文件 {path_obj.name}: {progress}", end="", flush=True)
-
-                    # 加密并发送块
+                    # 发送块
                     await send_encrypted_fn(json.dumps(chunk_msg).encode('utf-8'))
-                    await asyncio.sleep(ClipboardConfig.NETWORK_DELAY) # Use config
+                    
+                    # 动态延迟：大文件减少延迟
+                    if network_delay > 0:
+                        await asyncio.sleep(network_delay)
+                    
+                    sent_chunks += 1
+                    
+                    # 显示进度
+                    if sent_chunks % max(1, total_chunks // 20) == 0 or sent_chunks == total_chunks:
+                        progress = self._format_progress(sent_chunks, total_chunks)
+                        elapsed = time.time() - transfer_start
+                        speed = (sent_chunks * chunk_size / 1024 / 1024) / max(elapsed, 0.1)
+                        print(f"\r📤 传输文件 {path_obj.name}: {progress} ({speed:.1f}MB/s)", end="", flush=True)
 
-            print(f"\n✅ 文件 {path_obj.name} 传输完成")
+            # 并发发送所有块
+            tasks = [send_chunk(chunk_index, chunk_data) for chunk_index, chunk_data in chunks_data]
+            await asyncio.gather(*tasks)
+
+            elapsed = time.time() - transfer_start
+            speed = (file_size / 1024 / 1024) / max(elapsed, 0.1)
+            print(f"\n✅ 文件 {path_obj.name} 传输完成 (用时 {elapsed:.1f}s, 平均 {speed:.1f}MB/s)")
             return True
 
         except Exception as e:
@@ -491,30 +542,31 @@ class FileHandler:
             return None
         
         try:
-            # Use AppKit from main thread via performSelectorOnMainThread
+            # Simplified approach - directly use AppKit without complex thread dispatching
             path_str = str(file_path.resolve())
+            print(f"📎 准备将文件设置到剪贴板: {file_path.name}")
             
-            # Use the PasteboardSetter class to set clipboard on main thread
-            result = AppKit.NSThread.isMainThread()
-            if result:  # Already on main thread
-                result_str = PasteboardSetter.setFileURL_(path_str)
-            else:  # Need to dispatch to main thread
-                # Use performSelectorOnMainThread to execute on main thread
-                result_str = objc.callmethod(
-                    PasteboardSetter, 
-                    "performSelectorOnMainThread:withObject:waitUntilDone:",
-                    "setFileURL:",
-                    path_str,
-                    True  # Wait until done
-                )
+            # Create pasteboard and file URL
+            pasteboard = AppKit.NSPasteboard.generalPasteboard()
+            pasteboard.clearContents()
             
-            # Parse result
-            if isinstance(result_str, str) and '|' in result_str:
-                success, change_count = result_str.split('|', 1)
-                if success == '1':
-                    return int(change_count)
+            file_url = AppKit.NSURL.fileURLWithPath_(path_str)
+            if not file_url:
+                print(f"❌ 无法创建文件URL: {path_str}")
+                return None
+                
+            # Create array with the file URL
+            urls = AppKit.NSArray.arrayWithObject_(file_url)
             
-            return None
+            # Write to pasteboard
+            success = pasteboard.writeObjects_(urls)
+            if success:
+                change_count = pasteboard.changeCount()
+                print(f"✅ 已将文件添加到Mac剪贴板: {file_path.name}")
+                return change_count
+            else:
+                print(f"❌ 添加文件到Mac剪贴板失败: {file_path.name}")
+                return None
             
         except Exception as e:
             print(f"❌ 设置剪贴板文件失败: {e}")

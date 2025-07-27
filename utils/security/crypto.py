@@ -29,7 +29,8 @@ class SecurityManager:
         if not self.public_key:
             raise ValueError("Public key not available")
         
-        pem_bytes = self.public_key.public_key_bytes(
+        # Fixed: Use public_bytes() instead of public_key_bytes()
+        pem_bytes = self.public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
@@ -64,6 +65,7 @@ class SecurityManager:
                 ).derive(shared_secret)
                 
                 print(f"🔑 共享密钥已建立 ({len(self.shared_key)} 字节)")
+                print(f"🔍 共享密钥前16字节: {self.shared_key[:16].hex()}")
                 return True
             else:
                 print(f"❌ 无法建立共享密钥：private_key={self.private_key is not None}, peer_public_key={self.peer_public_key is not None}")
@@ -75,7 +77,7 @@ class SecurityManager:
             traceback.print_exc()
             return False
 
-    def encrypt_message(self, message: bytes) -> bytes:
+    def encrypt_message(self, message: bytes, return_base64: bool = False) -> bytes:
         """Encrypt message using shared key"""
         if not self.shared_key:
             print(f"❌ 加密失败：shared_key={self.shared_key is not None}")
@@ -90,6 +92,12 @@ class SecurityManager:
             
             # Return IV + tag + ciphertext
             encrypted_data = iv + encryptor.tag + ciphertext
+            
+            # Debug info removed to avoid clipboard pollution
+            
+            if return_base64:
+                encrypted_data = base64.b64encode(encrypted_data)
+                
             print(f"🔒 消息加密成功 ({len(message)} -> {len(encrypted_data)} 字节)")
             return encrypted_data
             
@@ -97,13 +105,27 @@ class SecurityManager:
             print(f"❌ 消息加密失败: {e}")
             raise
 
-    def decrypt_message(self, encrypted_data: bytes) -> bytes:
+    def decrypt_message(self, encrypted_data) -> bytes:
         """Decrypt message using shared key"""
         if not self.shared_key:
             print(f"❌ 解密失败：shared_key={self.shared_key is not None}")
             raise ValueError("Shared key not established")
         
         try:
+            # Handle string input by encoding to bytes (WebSocket text mode)
+            if isinstance(encrypted_data, str):
+                # Check if this looks like unencrypted JSON
+                if encrypted_data.startswith('{') and 'type' in encrypted_data:
+                    raise ValueError("Received unencrypted JSON data instead of encrypted data")
+                # Convert string to bytes using latin1 to preserve binary data
+                encrypted_data = encrypted_data.encode('latin1')
+            elif isinstance(encrypted_data, bytes):
+                # Check if bytes look like JSON
+                if encrypted_data.startswith(b'{') and b'type' in encrypted_data:
+                    raise ValueError("Received unencrypted JSON bytes instead of encrypted data")
+            else:
+                raise ValueError(f"encrypted_data must be bytes or string, got {type(encrypted_data)}")
+            
             if len(encrypted_data) < 28:  # 12 (IV) + 16 (tag) minimum
                 raise ValueError(f"Encrypted data too short: {len(encrypted_data)} bytes")
             
@@ -111,6 +133,8 @@ class SecurityManager:
             iv = encrypted_data[:12]
             tag = encrypted_data[12:28]
             ciphertext = encrypted_data[28:]
+            
+            # Debug info removed to avoid clipboard pollution
             
             cipher = Cipher(algorithms.AES(self.shared_key), modes.GCM(iv, tag), backend=default_backend())
             decryptor = cipher.decryptor()
@@ -121,6 +145,13 @@ class SecurityManager:
             
         except Exception as e:
             print(f"❌ 消息解密失败: {e}")
+            print(f"   数据类型: {type(encrypted_data)}")
+            if hasattr(encrypted_data, '__len__'):
+                print(f"   数据长度: {len(encrypted_data)}")
+            if isinstance(encrypted_data, str):
+                print(f"   原始字符串前50字符: {repr(encrypted_data[:50])}")
+            else:
+                print(f"   数据hex前100字符: {encrypted_data[:50].hex()}")
             raise
 
     async def perform_key_exchange(self, send_data_func, receive_data_func):

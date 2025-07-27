@@ -1,24 +1,31 @@
+"""
+UniPaste Windows Client
+Handles clipboard synchronization and file transfer for Windows systems
+"""
+
 import asyncio
-import websockets
+import base64
+import hashlib
 import json
 import os
-import time
+import struct
 import sys
-from pathlib import Path
-from utils.security.crypto import SecurityManager
-from utils.network.discovery import DeviceDiscovery
-from utils.message_format import ClipMessage, MessageType
-from handlers.file_handler import FileHandler
-from utils.platform_config import verify_platform, IS_WINDOWS
-from config import ClipboardConfig
+import time
 import traceback
-from enum import IntEnum
+from pathlib import Path
 
-class ConnectionStatus(IntEnum):
-    """连接状态枚举"""
-    DISCONNECTED = 0
-    CONNECTING = 1
-    CONNECTED = 2
+import websockets
+from ctypes import Structure, c_uint, sizeof
+
+from config import ClipboardConfig
+from handlers.file_handler import FileHandler
+from utils.connection_utils import ConnectionManager
+from utils.constants import ConnectionStatus
+from utils.message_format import ClipMessage, MessageType
+from utils.network.discovery import DeviceDiscovery
+from utils.platform_config import verify_platform, IS_WINDOWS
+from utils.security.crypto import SecurityManager
+
 
 # Verify platform at startup
 verify_platform('windows')
@@ -39,26 +46,41 @@ class DROPFILES(Structure):
     ]
 
 class WindowsClipboardClient:
+    """
+    Windows clipboard client for UniPaste
+    Handles clipboard synchronization, file transfers, and server communication
+    """
+    
     def __init__(self):
+        # Core components
         self.security_mgr = SecurityManager()
         self.discovery = DeviceDiscovery()
-        self.ws_url = None
-        self.is_receiving = False
+        self.connection_mgr = ConnectionManager()
+        
+        # Device identification
         self.device_id = self._get_device_id()
         self.device_token = self._load_device_token()
+        
+        # Connection state
+        self.ws_url = None
+        self.connection_status = ConnectionStatus.DISCONNECTED
         self.running = True
+        
+        # Clipboard state
+        self.is_receiving = False
         self.last_content_hash = None
         self.last_update_time = 0
         self.last_remote_content_hash = None
         self.last_remote_update_time = 0
         self.ignore_clipboard_until = 0
         self._last_processed_content = None
-
-        # 初始化连接状态管理
-        self.connection_status = ConnectionStatus.DISCONNECTED
-        self.reconnect_delay = 3
-        self.max_reconnect_delay = 30
-        self.last_discovery_time = 0
+        
+        # Binary transfer state
+        self._pending_binary_chunks = {}  # Track binary chunks waiting for data
+        
+        # Multi-file batch handling
+        self._pending_file_batches = {}  # Track files that are part of the same batch
+        self._completed_files = {}  # Store completed files waiting to be added to clipboard
 
         # Initialize file handler - 修复：使用正确的构造函数
         try:
@@ -108,13 +130,15 @@ class WindowsClipboardClient:
             
             self.file_handler = MinimalFileHandler()
 
-        # 尝试加载文件缓存
+        # Load file cache if available
         try:
             if hasattr(self.file_handler, 'load_file_cache'):
                 self.file_handler.load_file_cache()
         except Exception as e:
             print(f"⚠️ 加载文件缓存失败: {e}")
 
+    # ================== Device Management ==================
+    
     def _get_device_id(self):
         """获取唯一设备ID"""
         import socket
@@ -158,12 +182,14 @@ class WindowsClipboardClient:
         except Exception as e:
             print(f"❌ 保存设备令牌失败: {e}")
 
+    # ================== Discovery & Connection ==================
+
     def on_service_found(self, url):
         """服务发现回调"""
         if url != self.ws_url:
             print(f"✅ 发现剪贴板服务: {url}")
             self.ws_url = url
-            self.last_discovery_time = time.time()
+            self.connection_mgr.last_discovery_time = time.time()
 
     def stop(self):
         """停止客户端"""
@@ -171,6 +197,8 @@ class WindowsClipboardClient:
         self.running = False
         if hasattr(self.discovery, 'close'):
             self.discovery.close()
+
+    # ================== Authentication & Security ==================
 
     def _generate_signature(self):
         """生成签名"""
@@ -263,12 +291,206 @@ class WindowsClipboardClient:
             traceback.print_exc()
             return False
 
-    def _set_windows_clipboard_file(self, file_path):
-        """设置Windows剪贴板文件"""
+    # ================== Clipboard Operations ==================
+
+    def _get_clipboard_files(self):
+        """检测Windows剪贴板中的文件路径"""
         try:
-            path_str = str(file_path.resolve())
-            files = path_str + '\0'
-            file_bytes = files.encode('utf-16le') + b'\0\0'
+            win32clipboard.OpenClipboard()
+            try:
+                # Check if clipboard contains files (CF_HDROP format)
+                if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
+                    # print("🔍 剪贴板中没有文件数据 (CF_HDROP)")  # Debug info
+                    return None
+                
+                # Get the clipboard data - CF_HDROP returns a tuple of file paths
+                hdrop_data = win32clipboard.GetClipboardData(win32con.CF_HDROP)
+                
+                # Handle tuple format returned by CF_HDROP
+                file_paths = []
+                try:
+                    if isinstance(hdrop_data, tuple):
+                        # CF_HDROP returns a tuple of file paths
+                        file_paths = list(hdrop_data)
+                    elif isinstance(hdrop_data, (bytes, bytearray)):
+                        # If we get binary data, parse DROPFILES structure
+                        if len(hdrop_data) >= 20:
+                            # Read DROPFILES header
+                            pFiles, pt_x, pt_y, fNC, fWide = struct.unpack('5I', hdrop_data[:20])
+                            
+                            print(f"🔍 DROPFILES结构: pFiles={pFiles}, fWide={fWide}")
+                            
+                            # Extract file paths starting from offset pFiles
+                            if pFiles < len(hdrop_data):
+                                file_data = hdrop_data[pFiles:]
+                                
+                                if fWide:  # Unicode (UTF-16LE)
+                                    file_string = file_data.decode('utf-16le', errors='ignore')
+                                    paths = file_string.split('\0')
+                                    file_paths = [path for path in paths if path.strip()]
+                                else:  # ANSI
+                                    file_string = file_data.decode('ascii', errors='ignore')
+                                    paths = file_string.split('\0')
+                                    file_paths = [path for path in paths if path.strip()]
+                                    
+                    elif isinstance(hdrop_data, str):
+                        # Single file path as string
+                        file_paths = [hdrop_data]
+                    else:
+                        print(f"❌ 未知的剪贴板数据格式: {type(hdrop_data)}")
+                        
+                except Exception as parse_error:
+                    print(f"❌ 解析剪贴板文件数据失败: {parse_error}")
+                    import traceback
+                    traceback.print_exc()
+                
+                # Validate file paths exist and handle both files and folders
+                # But filter out temp files to avoid infinite loops
+                valid_paths = []
+                temp_dir_str = str(self.file_handler.temp_dir)
+                
+                for path in file_paths:
+                    if os.path.exists(path):
+                        path_obj = Path(path)
+                        
+                        # Skip temp files to avoid sending back files we just received
+                        if temp_dir_str in str(path_obj):
+                            # Create a unique key for this specific temp file to avoid repeated messages
+                            temp_file_key = f"temp_skip_{path_obj.name}"
+                            if not hasattr(self, '_temp_skip_tracker'):
+                                self._temp_skip_tracker = {}
+                            
+                            # Only print message once per file per session, or every 30 seconds
+                            current_time = time.time()
+                            if (temp_file_key not in self._temp_skip_tracker or 
+                                current_time - self._temp_skip_tracker[temp_file_key] > 30):
+                                print(f"⏭️ 跳过临时文件（避免循环发送）: {path_obj.name}")
+                                self._temp_skip_tracker[temp_file_key] = current_time
+                            continue
+                            
+                        if path_obj.is_file():
+                            valid_paths.append(path)
+                        elif path_obj.is_dir():
+                            print(f"📁 检测到文件夹: {path_obj.name}")
+                            # 收集文件夹中的所有文件
+                            try:
+                                folder_files = []
+                                for item in path_obj.rglob('*'):
+                                    if item.is_file():
+                                        # Also skip temp files in folders
+                                        if temp_dir_str not in str(item):
+                                            folder_files.append(str(item))
+                                if folder_files:
+                                    valid_paths.extend(folder_files)
+                                    print(f"📁 从文件夹 {path_obj.name} 中找到 {len(folder_files)} 个文件")
+                                else:
+                                    print(f"⚠️ 文件夹 {path_obj.name} 中没有文件（或都是临时文件）")
+                            except Exception as e:
+                                print(f"❌ 读取文件夹 {path_obj.name} 时出错: {e}")
+                
+                if valid_paths:
+                    # Only print this message occasionally to avoid spam for the same files
+                    files_hash = hashlib.md5(str(sorted(valid_paths)).encode()).hexdigest()
+                    if not hasattr(self, '_last_files_hash') or self._last_files_hash != files_hash:
+                        print(f"✅ Windows剪贴板检测到 {len(valid_paths)} 个有效文件")
+                        self._last_files_hash = files_hash
+                return valid_paths if valid_paths else None
+                
+            finally:
+                win32clipboard.CloseClipboard()
+                
+        except Exception as e:
+            # Clipboard access can fail if another app is using it
+            print(f"⚠️ Windows剪贴板文件检测失败: {e}")
+            return None
+
+    async def _send_files_to_server(self, websocket, file_paths):
+        """发送文件到服务器（支持批量文件）"""
+        try:
+            if not file_paths:
+                return
+            
+            print(f"📤 准备发送 {len(file_paths)} 个文件...")
+            
+            # Send file info message first
+            file_info_list = []
+            total_size = 0
+            
+            for file_path in file_paths:
+                path_obj = Path(file_path)
+                if path_obj.exists() and path_obj.is_file():
+                    file_size = path_obj.stat().st_size
+                    file_info = {
+                        'filename': path_obj.name,
+                        'size': file_size,
+                        'path': str(path_obj),
+                        'hash': ClipMessage.calculate_file_hash(str(path_obj))
+                    }
+                    file_info_list.append(file_info)
+                    total_size += file_size
+            
+            if not file_info_list:
+                print("⚠️ 没有有效文件可发送")
+                return
+            
+            # Send file info message
+            message = {
+                'type': 'file',
+                'files': file_info_list,
+                'timestamp': time.time()
+            }
+            
+            message_json = json.dumps(message)
+            encrypted_data = self.security_mgr.encrypt_message(message_json.encode('utf-8'))
+            await websocket.send(encrypted_data)
+            
+            # Display file info
+            file_names = [info['filename'] for info in file_info_list]
+            print(f"📤 已发送文件信息: {', '.join(file_names)} (总大小: {total_size/1024/1024:.1f}MB)")
+            
+            # Send each file using the file handler
+            async def send_encrypted_fn(data):
+                if isinstance(data, bytes):
+                    encrypted = self.security_mgr.encrypt_message(data)
+                else:
+                    encrypted = self.security_mgr.encrypt_message(data.encode('utf-8'))
+                await websocket.send(encrypted)
+            
+            # Send files one by one (or implement concurrent sending for better performance)
+            for file_path in file_paths:
+                if os.path.exists(file_path) and os.path.isfile(file_path):
+                    print(f"📤 开始传输文件: {Path(file_path).name}")
+                    success = await self.file_handler.handle_file_transfer(file_path, send_encrypted_fn)
+                    if success:
+                        print(f"✅ 文件传输成功: {Path(file_path).name}")
+                    else:
+                        print(f"❌ 文件传输失败: {Path(file_path).name}")
+            
+            print(f"🎉 批量文件传输完成: {len(file_paths)} 个文件")
+            
+        except Exception as e:
+            print(f"❌ 发送文件到服务器失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _set_windows_clipboard_files(self, file_paths):
+        """设置Windows剪贴板文件（支持多个文件）"""
+        try:
+            if not file_paths:
+                return False
+                
+            # Convert single file to list for consistency
+            if not isinstance(file_paths, list):
+                file_paths = [file_paths]
+            
+            # Build null-terminated string list of file paths
+            files_str = ''
+            for file_path in file_paths:
+                path_str = str(Path(file_path).resolve())
+                files_str += path_str + '\0'
+            files_str += '\0'  # Double null terminator at the end
+            
+            file_bytes = files_str.encode('utf-16le')
 
             df = DROPFILES()
             df.pFiles = sizeof(df)
@@ -282,7 +504,12 @@ class WindowsClipboardClient:
             try:
                 win32clipboard.EmptyClipboard()
                 win32clipboard.SetClipboardData(win32con.CF_HDROP, data)
-                print(f"📎 已将文件添加到剪贴板: {file_path.name}")
+                
+                if len(file_paths) == 1:
+                    print(f"📎 已将文件添加到剪贴板: {Path(file_paths[0]).name}")
+                else:
+                    file_names = [Path(p).name for p in file_paths]
+                    print(f"📎 已将 {len(file_paths)} 个文件添加到剪贴板: {', '.join(file_names)}")
                 return True
             finally:
                 win32clipboard.CloseClipboard()
@@ -290,6 +517,12 @@ class WindowsClipboardClient:
         except Exception as e:
             print(f"❌ 设置剪贴板文件失败: {e}")
             return False
+
+    def _set_windows_clipboard_file(self, file_path):
+        """设置Windows剪贴板文件（单个文件，向后兼容）"""
+        return self._set_windows_clipboard_files([file_path])
+
+    # ================== Message Handling ==================
 
     async def send_clipboard_changes(self, websocket):
         """发送剪贴板变化"""
@@ -413,6 +646,87 @@ class WindowsClipboardClient:
             self.last_remote_content_hash = new_hash
             self.last_remote_update_time = time.time()
 
+    async def _handle_file_info(self, message):
+        """处理文件信息消息"""
+        try:
+            files = message.get('files', [])
+            if not files:
+                print("⚠️ 收到空文件列表")
+                return
+            
+            print(f"📁 收到文件信息: {len(files)} 个文件")
+            
+            # Create a batch for this file group
+            batch_id = message.get('timestamp', time.time())
+            expected_files = []
+            
+            for file_info in files:
+                filename = file_info.get('filename', '未知文件')
+                size = file_info.get('size', 0)
+                print(f"  📄 {filename} ({size/1024/1024:.1f}MB)")
+                expected_files.append(filename)
+            
+            # Track this batch of files
+            self._pending_file_batches[batch_id] = {
+                'expected_files': expected_files,
+                'completed_files': [],
+                'total_count': len(expected_files)
+            }
+            
+            print(f"🔄 等待接收 {len(expected_files)} 个文件...")
+            
+        except Exception as e:
+            print(f"❌ 处理文件信息时出错: {e}")
+
+    async def _handle_binary_file_metadata(self, metadata):
+        """处理二进制模式的文件元数据"""
+        try:
+            filename = metadata.get('filename', '未知文件')
+            chunk_index = metadata.get('chunk_index', 0)
+            chunk_size = metadata.get('chunk_size', 0)
+            
+            # Store metadata for when binary data arrives
+            key = f"{filename}_{chunk_index}"
+            self._pending_binary_chunks[key] = metadata
+            
+            print(f"📦 等待二进制数据: {filename} 块 {chunk_index+1}, 大小 {chunk_size} 字节")
+            
+        except Exception as e:
+            print(f"❌ 处理二进制文件元数据时出错: {e}")
+
+    async def _handle_raw_binary_data(self, binary_data):
+        """处理原始二进制文件数据"""
+        try:
+            # Find the most recent pending binary chunk
+            # In a proper implementation, we'd match by chunk order or other identifier
+            if not self._pending_binary_chunks:
+                print("⚠️ 收到二进制数据但没有等待的元数据")
+                return
+            
+            # Get the latest pending chunk (FIFO approach)
+            key = next(iter(self._pending_binary_chunks))
+            metadata = self._pending_binary_chunks.pop(key)
+            
+            # Create a complete message for the file handler
+            complete_message = {
+                'type': 'file_response',
+                'filename': metadata.get('filename'),
+                'chunk_index': metadata.get('chunk_index'),
+                'total_chunks': metadata.get('total_chunks'),
+                'chunk_data': base64.b64encode(binary_data).decode('utf-8'),
+                'chunk_hash': metadata.get('chunk_hash'),
+                'file_hash': metadata.get('file_hash'),
+                'exists': True
+            }
+            
+            # Process as normal file response
+            await self._handle_file_response(complete_message)
+            
+        except Exception as e:
+            print(f"❌ 处理原始二进制数据时出错: {e}")
+
+    # ================== Connection Management ==================
+
     async def show_connection_status(self):
         """显示连接状态"""
         last_status = None
@@ -455,20 +769,50 @@ class WindowsClipboardClient:
             is_complete, completed_path = self.file_handler.handle_received_chunk(message)
 
             if is_complete and completed_path:
-                print(f"✅ 文件接收完成: {completed_path}")
-                if self._set_windows_clipboard_file(completed_path):
-                    print(f"📎 已将文件添加到剪贴板: {completed_path.name}")
-                else:
-                    print(f"❌ 未能将文件设置到剪贴板: {completed_path.name}")
+                filename = completed_path.name
+                print(f"✅ 文件接收完成: {filename}")
+                
+                # Find which batch this file belongs to
+                batch_found = False
+                for batch_id, batch_info in self._pending_file_batches.items():
+                    if filename in batch_info['expected_files']:
+                        batch_info['completed_files'].append(completed_path)
+                        batch_found = True
+                        
+                        print(f"📦 批次进度: {len(batch_info['completed_files'])}/{batch_info['total_count']} 个文件")
+                        
+                        # Check if all files in this batch are complete
+                        if len(batch_info['completed_files']) >= batch_info['total_count']:
+                            print(f"🎉 文件批次完成: {len(batch_info['completed_files'])} 个文件")
+                            
+                            # Set all files to clipboard at once
+                            if self._set_windows_clipboard_files(batch_info['completed_files']):
+                                print(f"✅ 已将 {len(batch_info['completed_files'])} 个文件添加到剪贴板")
+                            else:
+                                print(f"❌ 未能将文件批次设置到剪贴板")
+                            
+                            # Clean up completed batch
+                            del self._pending_file_batches[batch_id]
+                        break
+                
+                # If no batch found, handle as single file (fallback)
+                if not batch_found:
+                    print(f"📄 处理单个文件: {filename}")
+                    if self._set_windows_clipboard_file(completed_path):
+                        print(f"✅ 已将单个文件添加到剪贴板: {filename}")
+                    else:
+                        print(f"❌ 未能将单个文件设置到剪贴板: {filename}")
 
         except Exception as e:
             print(f"❌ 处理文件响应时出错: {e}")
             traceback.print_exc()
+    
 
     # 添加其他缺失的方法...
     async def sync_clipboard(self):
         """主同步循环"""
         print("🔍 搜索剪贴板服务...")
+        print("🔄 无限重试模式已启用 - 将持续尝试连接直到成功")
         self.discovery.start_discovery(self.on_service_found)
 
         while self.running:
@@ -482,10 +826,16 @@ class WindowsClipboardClient:
                     print(f"🔌 正在连接到服务器: {self.ws_url}")
 
                     try:
-                        await self.connect_and_sync()
-                        print("ℹ️ 连接已关闭，将尝试重新连接")
+                        result = await self.connect_and_sync()
+                        if result:
+                            print("ℹ️ 连接已关闭，将尝试重新连接")
+                        else:
+                            print("❌ 连接失败")
+                        
+                        # Always trigger reconnection logic for any disconnection
+                        self.connection_status = ConnectionStatus.DISCONNECTED
                         self.ws_url = None
-                        await asyncio.sleep(1)
+                        await self.wait_for_reconnect()
                     except Exception as e:
                         print(f"❌ 连接错误: {e}")
                         self.connection_status = ConnectionStatus.DISCONNECTED
@@ -502,17 +852,12 @@ class WindowsClipboardClient:
 
     async def wait_for_reconnect(self):
         """等待重连"""
-        delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
-        self.reconnect_delay = delay
-        print(f"⏱️ {int(delay)}秒后重新尝试连接...")
-        
-        wait_start = time.time()
-        while self.running and time.time() - wait_start < delay:
-            await asyncio.sleep(0.5)
+        print("🔄 启动自动重连机制...")
+        await self.connection_mgr.wait_for_reconnect(lambda: self.running)
 
         if self.running:
             self.ws_url = None
-            print("🔄 重新搜索剪贴板服务...")
+            print("🔍 重新搜索剪贴板服务...")
             self.discovery.start_discovery(self.on_service_found)
 
     async def connect_and_sync(self):
@@ -528,9 +873,9 @@ class WindowsClipboardClient:
             async with websockets.connect(
                 self.ws_url,
                 subprotocols=["binary"],
-                ping_interval=20,
-                ping_timeout=20,
-                close_timeout=10
+                ping_interval=60,  # Ping every minute
+                ping_timeout=30,   # Wait 30s for pong
+                close_timeout=30   # Wait 30s for close
             ) as websocket:
                 print("✅ WebSocket 连接已建立")
                 
@@ -546,7 +891,7 @@ class WindowsClipboardClient:
                 
                 print("🎉 连接建立成功，开始同步...")
                 self.connection_status = ConnectionStatus.CONNECTED
-                self.reconnect_delay = 3  # Reset reconnect delay on successful connection
+                self.connection_mgr.reset_reconnect_delay()  # Reset reconnect delay on successful connection
                 
                 # Start clipboard monitoring and message handling
                 clipboard_task = asyncio.create_task(self.monitor_clipboard(websocket))
@@ -595,8 +940,9 @@ class WindowsClipboardClient:
             self.connection_status = ConnectionStatus.DISCONNECTED
 
     async def monitor_clipboard(self, websocket):
-        """监控剪贴板变化并发送到服务器"""
+        """监控剪贴板变化并发送到服务器（支持文本和文件）"""
         last_clipboard_data = None
+        last_file_paths = None
         
         while self.running and self.connection_status == ConnectionStatus.CONNECTED:
             try:
@@ -605,16 +951,30 @@ class WindowsClipboardClient:
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                     continue
                 
+                # First check for files in clipboard
+                file_paths = self._get_clipboard_files()
+                if file_paths and file_paths != last_file_paths:
+                    # Handle file content
+                    await self._send_files_to_server(websocket, file_paths)
+                    last_file_paths = file_paths
+                    # Set ignore period to avoid rapid re-sending
+                    self.ignore_clipboard_until = time.time() + ClipboardConfig.UPDATE_DELAY
+                    continue
+                elif file_paths is None and last_file_paths is not None:
+                    # Files were removed from clipboard, reset state
+                    last_file_paths = None
+                
+                # If no files, check for text content
                 current_clipboard = None
                 try:
-                    # 尝试获取剪贴板内容
+                    # 尝试获取剪贴板文本内容
                     current_clipboard = pyperclip.paste()
                 except Exception as e:
                     # 如果获取失败，继续等待
                     await asyncio.sleep(ClipboardConfig.CLIPBOARD_CHECK_INTERVAL)
                     continue
                 
-                # 检查内容是否有变化
+                # 检查文本内容是否有变化
                 if current_clipboard != last_clipboard_data and current_clipboard:
                     # 计算内容哈希
                     import hashlib
@@ -624,9 +984,9 @@ class WindowsClipboardClient:
                     if (content_hash != self.last_remote_content_hash and 
                         content_hash != self.last_content_hash):
                         
-                        print(f"📤 检测到剪贴板变化，发送到服务器...")
+                        print(f"📤 检测到文本剪贴板变化，发送到服务器...")
                         
-                        # 创建消息
+                        # 创建文本消息
                         message = {
                             'type': 'text',
                             'content': current_clipboard,
@@ -635,8 +995,10 @@ class WindowsClipboardClient:
                         }
                         
                         try:
-                            # 发送到服务器
-                            await websocket.send(json.dumps(message))
+                            # 加密并发送到服务器
+                            message_json = json.dumps(message)
+                            encrypted_data = self.security_mgr.encrypt_message(message_json.encode('utf-8'))
+                            await websocket.send(encrypted_data)
                             
                             # 更新本地状态
                             self.last_content_hash = content_hash
@@ -669,10 +1031,25 @@ class WindowsClipboardClient:
                     message = await websocket.recv()
                     
                     if isinstance(message, bytes):
-                        # 处理二进制消息（通常是文件数据）
-                        await self._handle_binary_message(message)
+                        # 所有二进制数据都应该是加密的，先解密
+                        try:
+                            decrypted_data = self.security_mgr.decrypt_message(message)
+                            
+                            # 尝试作为JSON解析
+                            try:
+                                decrypted_text = decrypted_data.decode('utf-8')
+                                data = json.loads(decrypted_text)
+                                await self._handle_json_message(data)
+                            except (UnicodeDecodeError, json.JSONDecodeError):
+                                # 如果不是JSON，可能是二进制文件数据
+                                await self._handle_raw_binary_data(decrypted_data)
+                                
+                        except Exception as e:
+                            print(f"❌ 解密二进制消息失败: {e}")
+                            # 如果解密失败，可能是真正的文件数据，尝试原来的处理方式
+                            await self._handle_binary_message(message)
                     else:
-                        # 处理JSON消息
+                        # 处理文本消息（通常是认证和密钥交换）
                         try:
                             data = json.loads(message)
                             await self._handle_json_message(data)
@@ -701,6 +1078,14 @@ class WindowsClipboardClient:
             
             if message_type == 'text':
                 await self._handle_text_message(data)
+            elif message_type == 'file':
+                await self._handle_file_info(data)
+            elif message_type == 'file_response':
+                # Check if this is binary mode
+                if data.get('binary_mode', False):
+                    await self._handle_binary_file_metadata(data)
+                else:
+                    await self._handle_file_response(data)
             elif message_type == 'file_chunk':
                 await self._handle_file_response(data)
             elif message_type == 'file_complete':

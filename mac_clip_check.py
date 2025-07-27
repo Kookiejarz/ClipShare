@@ -1,21 +1,34 @@
-import AppKit
+"""
+UniPaste Mac Server
+Clipboard synchronization server for macOS systems
+Handles multiple client connections and clipboard broadcasting
+"""
+
 import asyncio
-import websockets
+import hashlib
 import json
 import signal
-import time
-from utils.security.crypto import SecurityManager
-from utils.security.auth import DeviceAuthManager
-from utils.network.discovery import DeviceDiscovery
-from utils.message_format import ClipMessage, MessageType
 import tempfile
+import time
 from pathlib import Path
-import hashlib
+
+import AppKit
+import websockets
+
+from config import ClipboardConfig
 from handlers.file_handler import FileHandler
-from config import ClipboardConfig # Import config
+from utils.connection_utils import ConnectionManager
+from utils.constants import ConnectionStatus
+from utils.message_format import ClipMessage, MessageType
+from utils.network.discovery import DeviceDiscovery
+from utils.security.auth import DeviceAuthManager
+from utils.security.crypto import SecurityManager
 
 class ClipboardListener:
-    """剪贴板监听和同步服务器"""
+    """
+    Mac clipboard server for UniPaste
+    Manages clipboard synchronization and file transfers across multiple clients
+    """
 
     def __init__(self):
         """初始化剪贴板监听器"""
@@ -35,6 +48,7 @@ class ClipboardListener:
             self.auth_mgr = DeviceAuthManager()
             self.discovery = DeviceDiscovery()
             self.connected_clients = set()
+            self.client_connection_managers = {}  # Track reconnection state per client
             print("✅ 基础组件初始化成功")
         except Exception as e:
             print(f"❌ 基础组件初始化失败: {e}")
@@ -81,7 +95,7 @@ class ClipboardListener:
             print(f"❌ 加密系统初始化失败: {e}")
             raise
 
-    # Removed load_file_cache as it's called in _init_file_handling
+    # ================== Security & Authentication ==================
 
     async def perform_key_exchange(self, websocket):
         """执行密钥交换"""
@@ -164,6 +178,7 @@ class ClipboardListener:
             traceback.print_exc()
             return False
 
+    # ================== Client Connection Management ==================
     
     async def handle_client(self, websocket):
         """处理 WebSocket 客户端连接"""
@@ -237,19 +252,25 @@ class ClipboardListener:
 
             # --- Add Client and Start Receiving ---
             self.connected_clients.add(websocket)
+            
+            # Reset connection manager for this client on successful connection
+            if device_id not in self.client_connection_managers:
+                self.client_connection_managers[device_id] = ConnectionManager()
+            self.client_connection_managers[device_id].reset_reconnect_delay()
+            
             print(f"✅ 设备 {device_id} 已连接并完成密钥交换")
 
             while self.running: # Rely on exceptions inside the loop to detect closure
                 try:
-                    # Use longer timeout or rely on keepalive if implemented
-                    encrypted_data = await asyncio.wait_for(websocket.recv(), timeout=30.0)
+                    # Use longer timeout to reduce unnecessary disconnects (5 minutes)
+                    encrypted_data = await asyncio.wait_for(websocket.recv(), timeout=300.0)
                     # Pass the specific client's websocket for potential direct replies
                     await self.process_received_data(encrypted_data, sender_websocket=websocket)
                 except asyncio.TimeoutError:
                     # Send keepalive ping or check connection status
                     try:
                         pong_waiter = await websocket.ping()
-                        await asyncio.wait_for(pong_waiter, timeout=5)
+                        await asyncio.wait_for(pong_waiter, timeout=30)
                     except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
                         print(f"⌛ 与 {device_id} 的连接超时或关闭，断开")
                         break # Exit loop on timeout/close during ping
@@ -281,7 +302,16 @@ class ClipboardListener:
         finally:
             if websocket in self.connected_clients:
                 self.connected_clients.remove(websocket)
-            print(f"➖ 设备 {device_id or client_ip} 已断开")
+            
+            # Log disconnection with retry info if available
+            if device_id and device_id in self.client_connection_managers:
+                mgr = self.client_connection_managers[device_id]
+                if mgr.connection_attempts > 0:
+                    print(f"➖ 设备 {device_id or client_ip} 已断开 (曾重试 {mgr.connection_attempts} 次)")
+                else:
+                    print(f"➖ 设备 {device_id or client_ip} 已断开")
+            else:
+                print(f"➖ 设备 {device_id or client_ip} 已断开")
 
 
     async def _send_encrypted(self, data: bytes, websocket):
@@ -295,6 +325,7 @@ class ClipboardListener:
             if websocket in self.connected_clients:
                 self.connected_clients.remove(websocket)
 
+    # ================== Message Processing ==================
 
     async def process_received_data(self, encrypted_data, sender_websocket=None):
         """处理从客户端接收到的加密数据"""
@@ -378,25 +409,40 @@ class ClipboardListener:
                          print("⏭️ 跳过重复文件内容 (与本地最后发送/设置一致)")
                          return
 
-                    # Set the completed file to the clipboard
-                    change_count = self.file_handler.set_clipboard_file(completed_path)
-                    if change_count is not None:
-                        # Update state *after* successful clipboard operation
-                        self.last_change_count = change_count
-                        self.last_content_hash = content_hash # Mark this hash as processed locally
-                        self.last_update_time = time.time() # Mark time of local update
-                        self.ignore_clipboard_until = time.time() + ClipboardConfig.UPDATE_DELAY # Ignore local changes briefly
+                    # Set the completed file to the clipboard with timeout protection
+                    try:
+                        print(f"📎 正在将文件设置到剪贴板: {completed_path.name}")
+                        change_count = await asyncio.wait_for(
+                            asyncio.get_event_loop().run_in_executor(
+                                None, 
+                                self.file_handler.set_clipboard_file, 
+                                completed_path
+                            ),
+                            timeout=10.0  # 10 second timeout
+                        )
+                        
+                        if change_count is not None:
+                            # Update state *after* successful clipboard operation
+                            self.last_change_count = change_count
+                            self.last_content_hash = content_hash # Mark this hash as processed locally
+                            self.last_update_time = time.time() # Mark time of local update
+                            self.ignore_clipboard_until = time.time() + ClipboardConfig.UPDATE_DELAY # Ignore local changes briefly
 
-                        # Record hash and time from remote sender for loop detection
-                        self.last_remote_content_hash = content_hash
-                        self.last_remote_update_time = time.time()
+                            # Record hash and time from remote sender for loop detection
+                            self.last_remote_content_hash = content_hash
+                            self.last_remote_update_time = time.time()
 
-                        # Add a small delay to allow pasteboard to settle
-                        await asyncio.sleep(0.1)
-                        print("DEBUG: Added small delay after setting file clipboard.")
+                            print(f"✅ 文件 {completed_path.name} 已成功设置到剪贴板")
 
-                    else:
-                         print(f"❌ 将文件 {completed_path.name} 设置到剪贴板失败")
+                        else:
+                             print(f"❌ 将文件 {completed_path.name} 设置到剪贴板失败")
+                             
+                    except asyncio.TimeoutError:
+                        print(f"❌ 设置文件 {completed_path.name} 到剪贴板超时（10秒）")
+                    except Exception as e:
+                        print(f"❌ 设置文件 {completed_path.name} 到剪贴板时出错: {e}")
+                        import traceback
+                        traceback.print_exc()
 
             elif msg_type == MessageType.FILE_REQUEST:
                  # Handle request from a client to send a file
@@ -426,6 +472,7 @@ class ClipboardListener:
         finally:
             self.is_receiving = False # Release lock
 
+    # ================== Clipboard Operations ==================
 
     async def process_clipboard(self) -> bool:
         """
@@ -452,7 +499,24 @@ class ClipboardListener:
                         if url and url.isFileURL():
                              file_path = url.path()
                              if file_path and Path(file_path).exists(): # Check existence
-                                  file_urls.append(file_path)
+                                  path_obj = Path(file_path)
+                                  if path_obj.is_file():
+                                      file_urls.append(file_path)
+                                  elif path_obj.is_dir():
+                                      print(f"📁 检测到文件夹: {path_obj.name}")
+                                      # 收集文件夹中的所有文件
+                                      folder_files = []
+                                      try:
+                                          for item in path_obj.rglob('*'):
+                                              if item.is_file():
+                                                  folder_files.append(str(item))
+                                          if folder_files:
+                                              file_urls.extend(folder_files)
+                                              print(f"📁 从文件夹 {path_obj.name} 中找到 {len(folder_files)} 个文件")
+                                          else:
+                                              print(f"⚠️ 文件夹 {path_obj.name} 中没有文件")
+                                      except Exception as e:
+                                          print(f"❌ 读取文件夹 {path_obj.name} 时出错: {e}")
                              else:
                                   print(f"⚠️ 剪贴板中的文件路径无效或不存在: {file_path}")
 
@@ -480,6 +544,11 @@ class ClipboardListener:
             if AppKit.NSPasteboardTypeString in types:
                 text = self.pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
                 if text: # Ensure text is not empty
+                    # Skip system debug messages to prevent clipboard pollution
+                    if any(debug_marker in text for debug_marker in ["🔄", "🔍", "调试信息", "连接成功", "重置重试延迟"]):
+                        print(f"⏭️ 跳过系统调试消息: {text[:30]}...")
+                        return False
+                        
                     # Anti-loop check: Compare with last received remote hash
                     content_hash = hashlib.md5(text.encode()).hexdigest()
                     if (self.last_remote_content_hash == content_hash and
@@ -518,6 +587,7 @@ class ClipboardListener:
 
         return sent_update # Return whether an update was sent
 
+    # ================== Network Broadcasting ==================
 
     async def broadcast_encrypted_data(self, data_to_encrypt: bytes, exclude_client=None):
         """Encrypts and broadcasts data to all connected clients, excluding one if specified."""
@@ -538,37 +608,64 @@ class ClipboardListener:
             # print("ℹ️ 没有需要广播的客户端") # Less verbose
             return
 
-        print(f"📢 广播数据到 {broadcast_count} 个客户端") # Show when actually broadcasting
+        print(f"📤 尝试广播数据到 {broadcast_count} 个客户端...")
 
         tasks = []
+        client_task_map = {}  # Track which task belongs to which client
         for client in active_clients:
             if client == exclude_client:
                 continue
             try:
                 # Ensure data is sent as bytes
-                tasks.append(asyncio.create_task(client.send(encrypted_data)))
+                task = asyncio.create_task(client.send(encrypted_data))
+                tasks.append(task)
+                client_task_map[task] = client
             except Exception as e:
                 print(f"❌ 创建广播任务失败: {e}")
-                # Remove problematic client immediately?
-                if client in self.connected_clients: self.connected_clients.remove(client)
+                # Remove problematic client immediately
+                if client in self.connected_clients: 
+                    self.connected_clients.remove(client)
+                    broadcast_count -= 1
 
         # Wait for all send tasks to complete (with a timeout)
         if tasks:
             done, pending = await asyncio.wait(tasks, timeout=10.0) # 10 second timeout for broadcast
 
-            # Handle timeouts or errors during broadcast
+            successful_sends = 0
+            failed_clients = []
+            
+            # Handle timeouts
             if pending:
                 print(f"⚠️ {len(pending)} 个广播任务超时")
                 for task in pending:
+                    failed_client = client_task_map[task]
+                    failed_clients.append(failed_client)
                     task.cancel()
+            
             # Check for exceptions in completed tasks
             for task in done:
-                 if task.exception():
-                      print(f"❌ 广播发送时出错: {task.exception()}")
-                      # Potentially identify and remove the client associated with the failed task
-                      # This requires mapping tasks back to clients, which adds complexity.
-                      # For now, rely on the main handle_client loop to detect closed connections.
+                if task.exception():
+                    failed_client = client_task_map[task]
+                    failed_clients.append(failed_client)
+                    print(f"❌ 广播发送时出错: {task.exception()}")
+                else:
+                    successful_sends += 1
+            
+            # Remove failed clients
+            for client in failed_clients:
+                if client in self.connected_clients:
+                    self.connected_clients.remove(client)
+                    print(f"🔌 移除失败的客户端连接")
+            
+            # Report actual success
+            if successful_sends > 0:
+                print(f"✅ 成功广播到 {successful_sends} 个客户端")
+            else:
+                print(f"❌ 广播失败，没有客户端接收到数据")
+        else:
+            print(f"⚠️ 没有有效的客户端可以广播")
 
+    # ================== Server Management ==================
 
     async def start_server(self, port=ClipboardConfig.DEFAULT_PORT): # Use config
         """启动 WebSocket 服务器"""
@@ -582,8 +679,8 @@ class ClipboardListener:
                     ClipboardConfig.HOST, # Use config
                     port,
                     subprotocols=["binary"],
-                    ping_interval=20, # Send pings every 20s
-                    ping_timeout=20   # Wait 20s for pong response
+                    ping_interval=60, # Send pings every minute
+                    ping_timeout=30   # Wait 30s for pong response
                 )
                 await self.discovery.start_advertising(port)
                 print(f"🌐 WebSocket 服务器启动在 {ClipboardConfig.HOST}:{port}")
@@ -631,18 +728,20 @@ class ClipboardListener:
 
                 # Ignore if we are currently processing a received update
                 if self.is_receiving:
-                    await asyncio.sleep(0.1) # Short sleep while receiving
+                    await asyncio.sleep(0.05) # Very short sleep while receiving
                     continue
 
                 # Ignore if we recently updated the clipboard locally
                 if current_time < self.ignore_clipboard_until:
-                    await asyncio.sleep(0.1) # Short sleep during ignore window
+                    await asyncio.sleep(0.05) # Very short sleep during ignore window
                     continue
 
                 # Check if enough time has passed since the last processing
                 time_since_process = current_time - last_processed_time
                 if time_since_process < ClipboardConfig.MIN_PROCESS_INTERVAL:
-                    await asyncio.sleep(0.1) # Wait if processing too频繁
+                    # Dynamic sleep based on remaining time
+                    remaining_time = ClipboardConfig.MIN_PROCESS_INTERVAL - time_since_process
+                    await asyncio.sleep(min(0.05, remaining_time))
                     continue
 
                 # Check for actual clipboard change count
@@ -692,7 +791,28 @@ class ClipboardListener:
         if hasattr(self, 'file_handler'):
              self.file_handler.save_file_cache()
 
+        # Log connection statistics
+        self._log_connection_statistics()
+        
         print("👋 感谢使用 UniPaste 服务器!")
+    
+    def _log_connection_statistics(self):
+        """记录连接统计信息"""
+        if not self.client_connection_managers:
+            return
+        
+        print("\n📊 连接统计:")
+        total_attempts = 0
+        devices_with_retries = 0
+        
+        for device_id, mgr in self.client_connection_managers.items():
+            total_attempts += mgr.connection_attempts
+            if mgr.connection_attempts > 1:
+                devices_with_retries += 1
+                print(f"  📱 {device_id}: {mgr.connection_attempts} 次连接尝试")
+        
+        if devices_with_retries > 0:
+            print(f"📈 总计: {len(self.client_connection_managers)} 台设备, {devices_with_retries} 台有重连, 总尝试 {total_attempts} 次")
 
     # Removed get_files_content_hash (moved to FileHandler)
 

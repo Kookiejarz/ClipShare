@@ -3,46 +3,69 @@ import asyncio
 import json
 import time
 import traceback
-from enum import IntEnum
 
-class ConnectionStatus(IntEnum):
-    """连接状态枚举"""
-    DISCONNECTED = 0
-    CONNECTING = 1
-    CONNECTED = 2
+from utils.constants import ConnectionStatus
 
 class ConnectionManager:
     """连接管理器"""
     
     def __init__(self):
         self.status = ConnectionStatus.DISCONNECTED
-        self.reconnect_delay = 3
-        self.max_reconnect_delay = 30
+        self.retry_delays = [15, 30, 60, 180, 300]  # 15s, 30s, 1m, 3m, 5m
+        self.current_retry_index = 0
+        self.max_retry_delay = 300  # 5 minutes max (will repeat this infinitely)
         self.last_discovery_time = 0
+        self.connection_attempts = 0
+        self.last_successful_connection = 0
+        self.infinite_retry = True  # Always retry without timeout
     
     def reset_reconnect_delay(self):
         """重置重连延迟"""
-        self.reconnect_delay = 3
+        self.current_retry_index = 0
+        self.connection_attempts = 0
+        self.last_successful_connection = time.time()
+        print("🔄 连接成功，重置重试延迟")
     
     def calculate_reconnect_delay(self) -> int:
-        """计算重连延迟时间"""
-        current_time = time.time()
-        if current_time - self.last_discovery_time < 10:
-            self.reconnect_delay = 3
-            return self.reconnect_delay
+        """计算重连延迟时间 - 使用预定义的退避序列"""
+        self.connection_attempts += 1
+        
+        # Use predefined delay sequence
+        if self.current_retry_index < len(self.retry_delays):
+            delay = self.retry_delays[self.current_retry_index]
+            self.current_retry_index += 1
         else:
-            delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
-            self.reconnect_delay = delay
-            return delay
+            # Stay at maximum delay after sequence is exhausted
+            delay = self.max_retry_delay
+        
+        return delay
+    
+    def get_retry_status(self) -> str:
+        """获取重试状态信息"""
+        if self.current_retry_index < len(self.retry_delays):
+            remaining = len(self.retry_delays) - self.current_retry_index
+            return f"尝试 {self.connection_attempts}, 剩余 {remaining} 个预设延迟"
+        else:
+            return f"尝试 {self.connection_attempts}, 无限重试模式"
     
     async def wait_for_reconnect(self, running_flag):
         """等待重连"""
         delay = self.calculate_reconnect_delay()
-        print(f"⏱️ {int(delay)}秒后重新尝试连接...")
+        status = self.get_retry_status()
         
+        # Format delay display
+        if delay >= 60:
+            delay_str = f"{delay//60}分{delay%60}秒" if delay % 60 else f"{delay//60}分钟"
+        else:
+            delay_str = f"{delay}秒"
+        
+        print(f"⏱️ {delay_str}后重新尝试连接... ({status}) [无限重试模式]")
+        
+        # More efficient waiting with longer sleep intervals for longer delays
+        sleep_interval = min(1.0, delay / 10)  # Adaptive sleep interval
         wait_start = time.time()
         while running_flag() and time.time() - wait_start < delay:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(sleep_interval)
 
 class AuthenticationHandler:
     """身份验证处理器"""

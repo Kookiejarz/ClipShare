@@ -20,7 +20,7 @@ UniPaste是一个端到端加密的跨平台剪贴板同步工具，支持 Mac �
 
 ## 📥 安装
 
-### 安装
+### 直接安装
 从 [Releases](https://github.com/Kookiejarz/UniPaste/releases) 页面下载最新的安装包。
 
 ### 前置要求
@@ -50,7 +50,7 @@ python mac_clip_check.py
 python windows_client.py
 ```
 
-## 📋 使用流程
+## 📋 实际使用流程
 
 1. 在 Mac 设备上启动服务端
 2. 在 Windows 设备上启动客户端
