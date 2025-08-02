@@ -10,7 +10,7 @@ class MessageType:
     FILE_START = "file_start"
     FILE_CHUNK = "file_chunk"
     FILE_RESPONSE = "file_response"
-    FILE_REQUEST = "file_request"  # 添加此行
+    FILE_REQUEST = "file_request"  
 
 class ClipMessage:
     """剪贴板消息格式化工具"""
