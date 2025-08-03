@@ -106,13 +106,13 @@ class ClipboardListener:
         device_id = None
         client_ip = websocket.remote_address[0] if websocket.remote_address else "未知IP"
         try:
-            # --- Authentication ---
+            # --- Authentication / Pairing ---
             auth_message = await websocket.recv()
             try:
                 if isinstance(auth_message, str):
-                    auth_info = json.loads(auth_message)
+                    message_data = json.loads(auth_message)
                 else:
-                    auth_info = json.loads(auth_message.decode('utf-8'))
+                    message_data = json.loads(auth_message.decode('utf-8'))
 
                 device_id = auth_info.get('identity', f'unknown-{client_ip}')
                 signature = auth_info.get('signature', '')
@@ -176,17 +176,17 @@ class ClipboardListener:
                     print(f"✅ 设备 {device_id} 验证成功")
 
             except json.JSONDecodeError:
-                print(f"❌ 来自 {client_ip} 的无效身份验证信息")
+                print(f"❌ 来自 {client_ip} 的无效消息格式")
                 await websocket.send(json.dumps({
                     'status': 'error',
-                    'reason': 'Invalid authentication format'
+                    'reason': 'Invalid message format'
                 }))
                 return
             except Exception as auth_err:
-                 print(f"❌ 身份验证错误 for {device_id or client_ip}: {auth_err}")
+                 print(f"❌ 处理消息错误 for {device_id or client_ip}: {auth_err}")
                  await websocket.send(json.dumps({
                     'status': 'error',
-                    'reason': f'Authentication failed: {auth_err}'
+                    'reason': f'Message processing failed: {auth_err}'
                  }))
                  return
 
