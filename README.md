@@ -1,7 +1,7 @@
 # UniPaste: 安全跨平台剪贴板同步工具
 
-![UniPaste](https://img.shields.io/badge/UniPaste-1.0.0-blue)
-![Python](https://img.shields.io/badge/Python-3.7+-green)
+![UniPaste](https://img.shields.io/badge/UniPaste-3.0.0-blue)
+![Python](https://img.shields.io/badge/Python-3.9+-green)
 
 UniPaste是一个端到端加密的跨平台剪贴板同步工具，支持 Mac 和 Windows 设备之间安全地共享剪贴板内容。
 
