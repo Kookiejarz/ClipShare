@@ -339,6 +339,7 @@ class FileHandler:
 
         files_to_request = []
         file_names = []
+        cached_files = []
 
         for file_info in files:
             file_hash = file_info.get("hash")
@@ -352,11 +353,10 @@ class FileHandler:
             file_names.append(filename)
 
             # Check cache first
-            if file_hash and self.get_from_file_cache(file_hash):
+            cached_file_path = self.get_from_file_cache(file_hash) if file_hash else None
+            if cached_file_path:
                 print(f"✅ 文件 '{filename}' 在缓存中找到 (Hash: {file_hash[:8]}...)")
-                # Optionally: Update clipboard here if only one file and it's cached?
-                # For now, we just skip the request.
-                continue
+                cached_files.append(cached_file_path)
             else:
                 if file_hash:
                     print(f"ℹ️ 文件 '{filename}' 不在缓存中或哈希缺失，请求传输。")
@@ -364,8 +364,21 @@ class FileHandler:
 
         if not files_to_request:
             print("✅ 所有收到的文件都在缓存中，无需请求。")
-            # If all files are cached, potentially update clipboard now?
-            # Needs careful consideration if multiple files were sent.
+            # Set cached files to clipboard
+            if cached_files:
+                if len(cached_files) == 1:
+                    # Single file - set directly to clipboard
+                    await self.set_clipboard_file(Path(cached_files[0]))
+                    print("📎 已将缓存文件设置到剪贴板")
+                else:
+                    # Multiple files - set all to clipboard
+                    from utils.clipboard_utils import ClipboardUtils
+                    if hasattr(ClipboardUtils, 'set_clipboard_files'):
+                        ClipboardUtils.set_clipboard_files([Path(f) for f in cached_files])
+                    else:
+                        # Fallback: set first file only
+                        await self.set_clipboard_file(Path(cached_files[0]))
+                    print(f"📎 已将 {len(cached_files)} 个缓存文件设置到剪贴板")
             return True # Indicate success (all cached or no files)
 
         print(f"📥 收到文件信息: {', '.join(file_names[:3])}{' 等' if len(file_names) > 3 else ''}")

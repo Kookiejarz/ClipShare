@@ -13,7 +13,7 @@ jobs:
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -39,10 +39,13 @@ jobs:
           a = Analysis(['mac_clip_check.py'],
                       pathex=[],
                       binaries=[],
-                      datas=[('LICENSE', '.'), ('utils', 'utils'), ('handlers', 'handlers')],
-                      hiddenimports=['AppKit', 'websockets', 'cryptography', 
-                                     'utils.security.crypto', 'utils.network.discovery',
-                                     'handlers.file_handler'],  # 替换为你的handlers下的模块
+                      datas=[('LICENSE', '.'), ('utils', 'utils'), ('handlers', 'handlers'), ('config.py', '.')],
+                      hiddenimports=['AppKit', 'websockets', 'cryptography', 'pyperclip',
+                                     'utils.security.crypto', 'utils.security.auth', 'utils.security.pairing',
+                                     'utils.network.discovery', 'utils.message_format', 'utils.platform_config',
+                                     'utils.clipboard_utils', 'utils.connection_utils', 'utils.constants',
+                                     'utils.error_handler', 'utils.message_handler', 'utils.status_manager',
+                                     'utils.base_client', 'handlers.file_handler', 'config'],
                       hookspath=[],
                       hooksconfig={},
                       runtime_hooks=[],
@@ -92,7 +95,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -108,7 +111,7 @@ jobs:
 
       - name: Build Windows application
         run: |
-          pyinstaller --onefile --name UniPaste-Win windows_client.py --add-data "utils;utils" --add-data "handlers;handlers"
+          pyinstaller --onefile --name UniPaste-Win windows_client.py --add-data "utils;utils" --add-data "handlers;handlers" --add-data "config.py;." --hidden-import="pywin32" --hidden-import="win32clipboard" --hidden-import="win32con" --hidden-import="win32com.shell" --hidden-import="pythoncom" --hidden-import="pyperclip" --hidden-import="websockets" --hidden-import="cryptography" --hidden-import="zeroconf" --hidden-import="netifaces" --hidden-import="utils.security.crypto" --hidden-import="utils.security.auth" --hidden-import="utils.security.pairing" --hidden-import="utils.network.discovery" --hidden-import="utils.message_format" --hidden-import="utils.platform_config" --hidden-import="utils.clipboard_utils" --hidden-import="utils.connection_utils" --hidden-import="utils.constants" --hidden-import="utils.error_handler" --hidden-import="utils.message_handler" --hidden-import="utils.status_manager" --hidden-import="utils.base_client" --hidden-import="handlers.file_handler" --hidden-import="config"
 
       - name: Package Windows application
         run: |
