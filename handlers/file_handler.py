@@ -339,6 +339,7 @@ class FileHandler:
 
         files_to_request = []
         file_names = []
+        cached_files = []
 
         for file_info in files:
             file_hash = file_info.get("hash")
@@ -352,11 +353,10 @@ class FileHandler:
             file_names.append(filename)
 
             # Check cache first
-            if file_hash and self.get_from_file_cache(file_hash):
+            cached_file_path = self.get_from_file_cache(file_hash) if file_hash else None
+            if cached_file_path:
                 print(f"✅ 文件 '{filename}' 在缓存中找到 (Hash: {file_hash[:8]}...)")
-                # Optionally: Update clipboard here if only one file and it's cached?
-                # For now, we just skip the request.
-                continue
+                cached_files.append(cached_file_path)
             else:
                 if file_hash:
                     print(f"ℹ️ 文件 '{filename}' 不在缓存中或哈希缺失，请求传输。")
@@ -364,8 +364,21 @@ class FileHandler:
 
         if not files_to_request:
             print("✅ 所有收到的文件都在缓存中，无需请求。")
-            # If all files are cached, potentially update clipboard now?
-            # Needs careful consideration if multiple files were sent.
+            # Set cached files to clipboard
+            if cached_files:
+                if len(cached_files) == 1:
+                    # Single file - set directly to clipboard
+                    await self.set_clipboard_file(Path(cached_files[0]))
+                    print("📎 已将缓存文件设置到剪贴板")
+                else:
+                    # Multiple files - set all to clipboard
+                    from utils.clipboard_utils import ClipboardUtils
+                    if hasattr(ClipboardUtils, 'set_clipboard_files'):
+                        ClipboardUtils.set_clipboard_files([Path(f) for f in cached_files])
+                    else:
+                        # Fallback: set first file only
+                        await self.set_clipboard_file(Path(cached_files[0]))
+                    print(f"📎 已将 {len(cached_files)} 个缓存文件设置到剪贴板")
             return True # Indicate success (all cached or no files)
 
         print(f"📥 收到文件信息: {', '.join(file_names[:3])}{' 等' if len(file_names) > 3 else ''}")
@@ -390,40 +403,113 @@ class FileHandler:
 
         return True # Indicate requests were sent
 
-    def set_clipboard_file(self, file_path: Path):
+    async def set_clipboard_file(self, file_path: Path):
         """将文件路径设置到剪贴板 (Uses main thread for macOS)"""
         try:
             path_str = str(file_path)
+            print(f"🔍 检查文件是否存在: {path_str} -> {file_path.exists()}")
+            if not file_path.exists():
+                print(f"❌ 文件不存在，无法设置到剪贴板: {path_str}")
+                return None
+            
+            # Ensure file has proper permissions in original location
+            file_path.chmod(0o644)
+            print(f"🔓 设置文件权限: 644")
             if IS_MACOS:
-                objc.registerMetaDataForSelector(
-                    b'PasteboardSetter', b'setFileURL_', {'retval': {'type': b'@'}}
-                )
-                result = PasteboardSetter.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    'setFileURL:', path_str, True
-                )
-                if result is None:
-                    # print("⚠️ 主线程剪贴板操作未返回结果，可能未正确注册 PasteboardSetter 或方法未被调用。")
-                    return None
-                # 解析 result
+                # Try direct clipboard operation without the complex PasteboardSetter
+                print(f"🔄 正在设置文件到剪贴板: {Path(path_str).name}")
                 try:
-                    success_str, change_count_str = result.split("|")
-                    success = success_str == "1"
-                    change_count = int(change_count_str)
+                    pasteboard = AppKit.NSPasteboard.generalPasteboard()
+                    pasteboard.clearContents()
+                    
+                    # Create file URL with multiple methods for better compatibility
+                    import Foundation
+                    
+                    # Method 1: Try with NSURL fileURLWithPath
+                    url = AppKit.NSURL.fileURLWithPath_(path_str)
+                    if not url:
+                        print(f"❌ 无法创建文件URL (方法1): {path_str}")
+                        return None
+                    
+                    # Method 2: Alternative - try creating URL differently  
+                    # url = Foundation.NSURL.URLWithString_("file://" + path_str.replace(" ", "%20"))
+                    
+                    print(f"🔗 创建文件URL: {url}")
+                    print(f"🔍 URL路径: {url.path()}")
+                    print(f"🔍 文件是否可读: {url.checkResourceIsReachableAndReturnError_(None)[0]}")
+                    
+                    # Method 1: Try writeObjects without declaring ownership first
+                    pasteboard.clearContents()
+                    urls = AppKit.NSArray.arrayWithObject_(url)
+                    success = pasteboard.writeObjects_(urls)
+                    print(f"📋 writeObjects (无所有权声明) 结果: {success}")
+                    
+                    if not success:
+                        # Method 2: Use NSFilenamesPboardType with ownership
+                        pasteboard.declareTypes_owner_([AppKit.NSFilenamesPboardType], None)
+                        filenames = [path_str]
+                        success = pasteboard.setPropertyList_forType_(filenames, AppKit.NSFilenamesPboardType)
+                        print(f"📋 setPropertyList (NSFilenamesPboardType) 结果: {success}")
+                        
+                        if success:
+                            # Try to release ownership immediately
+                            pasteboard.declareTypes_owner_([], None)
+                            print(f"📋 已释放剪贴板所有权")
+                    
+                    if not success:
+                        # Method 3: Try modern file URL type
+                        pasteboard.declareTypes_owner_([AppKit.NSPasteboardTypeFileURL], None)
+                        success = pasteboard.setString_forType_(url.absoluteString(), AppKit.NSPasteboardTypeFileURL)
+                        print(f"📋 setString (NSPasteboardTypeFileURL) 结果: {success}")
+                        
+                        if success:
+                            # Try to release ownership immediately
+                            pasteboard.declareTypes_owner_([], None)
+                            print(f"📋 已释放剪贴板所有权")
+                    
+                    if success:
+                        change_count = pasteboard.changeCount()
+                        print(f"✅ 文件已直接添加到Mac剪贴板: {Path(path_str).name}")
+                        print(f"📋 剪贴板变化计数: {change_count}")
+                        
+                        # Debug: Check what types are actually on clipboard now
+                        types_after = pasteboard.types()
+                        print(f"🔍 设置后剪贴板类型: {list(types_after)}")
+                        
+                        # Debug: Check what content is on clipboard
+                        if AppKit.NSPasteboardTypeString in types_after:
+                            text_content = pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
+                            print(f"🔍 剪贴板文本内容: {text_content[:50] if text_content else 'None'}...")
+                        
+                        if AppKit.NSFilenamesPboardType in types_after:
+                            file_list = pasteboard.propertyListForType_(AppKit.NSFilenamesPboardType)
+                            print(f"🔍 剪贴板文件列表: {file_list}")
+                        
+                        return change_count
+                    else:
+                        print(f"❌ 直接添加文件到Mac剪贴板失败: {Path(path_str).name}")
+                        return None
+                        
                 except Exception as e:
-                    print(f"⚠️ 解析主线程返回值失败: {result} ({e})")
-                    return None
-                if success:
-                    return change_count
-                else:
+                    print(f"❌ 直接设置剪贴板文件时出错: {e}")
+                    import traceback
+                    traceback.print_exc()
                     return None
 
             elif IS_WINDOWS:
-                # Windows specific logic will be called from windows_client.py
-                # This method primarily handles the macOS part or acts as a placeholder
-                print(f"ℹ️ Windows剪贴板设置应在客户端处理: {file_path.name}")
-                # We return True here to indicate the file handler part is done,
-                # but the actual clipboard setting happens in windows_client.py
-                return True
+                # Use the Windows clipboard utility directly
+                from utils.clipboard_utils import ClipboardUtils
+                try:
+                    success = ClipboardUtils.set_clipboard_file(file_path)
+                    if success:
+                        print(f"📎 已将文件添加到剪贴板: {file_path.name}")
+                        return True
+                    else:
+                        print(f"❌ 设置Windows剪贴板文件失败: {file_path.name}")
+                        return False
+                except Exception as e:
+                    print(f"❌ Windows剪贴板设置出错: {e}")
+                    return False
             else:
                 print("⚠️ 未知的操作系统，无法设置剪贴板文件")
                 return None
