@@ -497,12 +497,19 @@ class FileHandler:
                     return None
 
             elif IS_WINDOWS:
-                # Windows specific logic will be called from windows_client.py
-                # This method primarily handles the macOS part or acts as a placeholder
-                print(f"ℹ️ Windows剪贴板设置应在客户端处理: {file_path.name}")
-                # We return True here to indicate the file handler part is done,
-                # but the actual clipboard setting happens in windows_client.py
-                return True
+                # Use the Windows clipboard utility directly
+                from utils.clipboard_utils import ClipboardUtils
+                try:
+                    success = ClipboardUtils.set_clipboard_file(file_path)
+                    if success:
+                        print(f"📎 已将文件添加到剪贴板: {file_path.name}")
+                        return True
+                    else:
+                        print(f"❌ 设置Windows剪贴板文件失败: {file_path.name}")
+                        return False
+                except Exception as e:
+                    print(f"❌ Windows剪贴板设置出错: {e}")
+                    return False
             else:
                 print("⚠️ 未知的操作系统，无法设置剪贴板文件")
                 return None

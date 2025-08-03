@@ -75,17 +75,11 @@ class SecurityManager:
         if not self.shared_key:
             raise ValueError("Shared key not established")
         
-        # 显示密钥信息
-        print(f"🔑 使用密钥 ({len(self.shared_key)} 字节) 加密，前8字节: {self.shared_key[:8].hex()}")
-        
-        print(f"🔒 正在加密 {len(message)} 字节数据...")
-        
         try:
             aesgcm = AESGCM(self.shared_key)
             nonce = os.urandom(12)
             ciphertext = aesgcm.encrypt(nonce, message, None)
             encrypted = nonce + ciphertext
-            print(f"✅ 加密成功! 加密后 {len(encrypted)} 字节")
             return encrypted
         except Exception as e:
             print(f"❌ 加密失败: {e}")
@@ -96,16 +90,11 @@ class SecurityManager:
         if not self.shared_key:
             raise ValueError("Shared key not established")
         
-        # 显示密钥信息
-        print(f"🔑 使用密钥 ({len(self.shared_key)} 字节) 解密，前8字节: {self.shared_key[:8].hex()}")
-        
         # 确保数据是二进制格式
         if not isinstance(encrypted_data, bytes):
-            print(f"⚠️ 将 {type(encrypted_data)} 转换为 bytes")
             try:
                 if isinstance(encrypted_data, str):
                     if encrypted_data.startswith('{'):
-                        print("⚠️ 跳过JSON格式数据，不尝试解密")
                         raise ValueError("JSON string cannot be decrypted directly")
                     
                     encrypted_data = encrypted_data.encode('utf-8')
@@ -120,17 +109,13 @@ class SecurityManager:
             if len(encrypted_data) <= 12:
                 raise ValueError(f"数据太短: {len(encrypted_data)} 字节")
                 
-            # 打印详细的nonce和密文信息用于调试
+            # 提取nonce和密文
             nonce = encrypted_data[:12]
             ciphertext = encrypted_data[12:]
-            print(f"🔍 Nonce ({len(nonce)} 字节): {nonce.hex()[:24]}...")
-            print(f"🔍 密文 ({len(ciphertext)} 字节): {ciphertext.hex()[:24] if len(ciphertext) >= 12 else ciphertext.hex()}...")
             
             aesgcm = AESGCM(self.shared_key)
             decrypted_data = aesgcm.decrypt(nonce, ciphertext, None)
             
-            # 打印解密成功信息
-            print(f"✅ 解密成功! 数据长度: {len(decrypted_data)} 字节")
             return decrypted_data
         except Exception as e:
             print(f"❌ 解密失败: {e}")
