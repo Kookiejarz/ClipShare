@@ -106,14 +106,19 @@ class ClipboardListener:
         device_id = None
         client_ip = websocket.remote_address[0] if websocket.remote_address else "未知IP"
         try:
-            # --- Authentication / Pairing ---
+            # --- Authentication / Pairing / Pairing ---
             auth_message = await websocket.recv()
             try:
                 if isinstance(auth_message, str):
                     message_data = json.loads(auth_message)
+                    message_data = json.loads(auth_message)
                 else:
                     message_data = json.loads(auth_message.decode('utf-8'))
+                    message_data = json.loads(auth_message.decode('utf-8'))
 
+                device_id = message_data.get('identity', f'unknown-{client_ip}')
+                signature = message_data.get('signature', '')
+                is_first_time = message_data.get('first_time', False)
                 device_id = message_data.get('identity', f'unknown-{client_ip}')
                 signature = message_data.get('signature', '')
                 is_first_time = message_data.get('first_time', False)

@@ -390,7 +390,7 @@ class FileHandler:
 
         return True # Indicate requests were sent
 
-    def set_clipboard_file(self, file_path: Path):
+    async def set_clipboard_file(self, file_path: Path):
         """将文件路径设置到剪贴板 (Uses main thread for macOS)"""
         try:
             path_str = str(file_path)
