@@ -114,9 +114,9 @@ class ClipboardListener:
                 else:
                     message_data = json.loads(auth_message.decode('utf-8'))
 
-                device_id = auth_info.get('identity', f'unknown-{client_ip}')
-                signature = auth_info.get('signature', '')
-                is_first_time = auth_info.get('first_time', False)
+                device_id = message_data.get('identity', f'unknown-{client_ip}')
+                signature = message_data.get('signature', '')
+                is_first_time = message_data.get('first_time', False)
 
                 print(f"📱 设备 {device_id} ({client_ip}) 尝试连接")
 
@@ -125,7 +125,7 @@ class ClipboardListener:
                     
                     # Request pairing
                     pairing_request = await self.pairing_mgr.request_pairing(
-                        device_id, auth_info, client_ip
+                        device_id, message_data, client_ip
                     )
                     
                     # Wait for user decision
@@ -134,8 +134,8 @@ class ClipboardListener:
                     if pairing_result == PairingStatus.ACCEPTED:
                         # Generate and send token
                         token = self.auth_mgr.authorize_device(device_id, {
-                            "name": auth_info.get("device_name", "未命名设备"),
-                            "platform": auth_info.get("platform", "未知平台"),
+                            "name": message_data.get("device_name", "未命名设备"),
+                            "platform": message_data.get("platform", "未知平台"),
                             "ip": client_ip
                         })
                         await websocket.send(json.dumps({
@@ -338,22 +338,35 @@ class ClipboardListener:
                          print("⏭️ 跳过重复文件内容 (与本地最后发送/设置一致)")
                          return
 
-                    # Set the completed file to the clipboard
-                    change_count = self.file_handler.set_clipboard_file(completed_path)
+                    # Store info but delay clipboard setting until after all logging
+                    file_to_set = completed_path
+                    content_hash_to_use = content_hash
+                    
+                    # Set file to clipboard AFTER all processing/logging
+                    await asyncio.sleep(0.1)  # Let any pending logs flush
+                    change_count = self.file_handler.set_clipboard_file(file_to_set)
                     if change_count is not None:
-                        # Update state *after* successful clipboard operation
+                        # Update change count to track the clipboard state
                         self.last_change_count = change_count
-                        self.last_content_hash = content_hash # Mark this hash as processed locally
-                        self.last_update_time = time.time() # Mark time of local update
-                        self.ignore_clipboard_until = time.time() + ClipboardConfig.UPDATE_DELAY # Ignore local changes briefly
-
-                        # Record hash and time from remote sender for loop detection
-                        self.last_remote_content_hash = content_hash
+                        
+                        # Mark this specific content as processed to prevent re-broadcast
+                        self.last_content_hash = content_hash_to_use  # Mark as processed
+                        self.last_update_time = time.time()
+                        
+                        # Completely stop clipboard monitoring temporarily
+                        self.ignore_clipboard_until = time.time() + 10.0  # 10 second ignore period
+                        
+                        # Record remote hash for loop detection
+                        self.last_remote_content_hash = content_hash_to_use
                         self.last_remote_update_time = time.time()
+                        
+                        print("✅ 文件已设置到剪贴板并可用于粘贴")
+                        print("🔄 文件已标记为已处理，防止重复广播")
+                        print("⏳ 暂停监控10秒以确保文件可访问")
+                        print("💡 在接下来10秒内，您可以自由粘贴文件而不受监控干扰")
 
-                        # Add a small delay to allow pasteboard to settle
-                        await asyncio.sleep(0.1)
-                        print("DEBUG: Added small delay after setting file clipboard.")
+                        # No delay needed since monitoring is paused
+                        # await asyncio.sleep(0.05)
 
                     else:
                          print(f"❌ 将文件 {completed_path.name} 设置到剪贴板失败")
@@ -362,10 +375,14 @@ class ClipboardListener:
                  # Handle request from a client to send a file
                  file_path_requested = message.get("path")
                  if file_path_requested:
-                      print(f"📤 收到文件请求: {Path(file_path_requested).name}")
+                      # Normalize path separators for cross-platform compatibility
+                      normalized_path = file_path_requested.replace('\\', '/')
+                      print(f"📤 收到文件请求: {Path(normalized_path).name}")
+                      print(f"🔍 原始路径: {file_path_requested}")
+                      print(f"🔍 标准化路径: {normalized_path}")
                       # Pass a function to encrypt and send data back to the *requester*
                       await self.file_handler.handle_file_transfer(
-                           file_path_requested,
+                           normalized_path,
                            lambda data: self._send_encrypted(data, sender_websocket) # Send file chunks back to sender
                       )
                  else:
@@ -468,11 +485,22 @@ class ClipboardListener:
             finally:
                 # Stop advertising
                 self.discovery.close()
+                
+                # Close all connected clients first
+                if self.connected_clients:
+                    print(f"📤 正在关闭 {len(self.connected_clients)} 个连接...")
+                    close_tasks = []
+                    for client in list(self.connected_clients):
+                        close_tasks.append(client.close())
+                    if close_tasks:
+                        await asyncio.gather(*close_tasks, return_exceptions=True)
+                    self.connected_clients.clear()
+                
                 # Close server if running
                 if self.server:
                     self.server.close()
                     try:
-                         await asyncio.wait_for(self.server.wait_closed(), timeout=5.0)
+                         await asyncio.wait_for(self.server.wait_closed(), timeout=2.0)
                          print("✅ WebSocket 服务器已关闭")
                     except asyncio.TimeoutError:
                          print("⚠️ WebSocket 服务器关闭超时")
@@ -511,6 +539,11 @@ class ClipboardListener:
                 new_change_count = self.pasteboard.changeCount()
                 if new_change_count != self.last_change_count:
                     print(f"📋 剪贴板变化 detected (Count: {self.last_change_count} -> {new_change_count})")
+                    
+                    # Debug: Show what types are on clipboard
+                    types = self.pasteboard.types()
+                    print(f"🔍 剪贴板类型: {list(types)}")
+                    
                     self.last_change_count = new_change_count
                     processed = await self.process_clipboard()
                     if processed:
@@ -553,7 +586,7 @@ class ClipboardListener:
                              else:
                                   print(f"⚠️ 剪贴板中的文件路径无效或不存在: {file_path}")
 
-                if file_urls:
+                if file_urls and self.connected_clients:
                     # Use FileHandler to create and send file info message
                     new_hash, update_sent = await self.file_handler.handle_clipboard_files(
                         file_urls,
@@ -564,19 +597,14 @@ class ClipboardListener:
                         self.last_content_hash = new_hash
                         self.last_update_time = time.time()
                         sent_update = True
-                        # Initiate the actual file transfer after sending info
-                        print("🔄 准备主动传输文件内容...")
-                        for file_path in file_urls:
-                             # Pass broadcast function for sending chunks
-                             await self.file_handler.handle_file_transfer(
-                                  file_path, self.broadcast_encrypted_data
-                             )
+                        # File info sent - clients will request files they need
+                        print("📤 文件信息已发送，等待客户端请求文件内容...")
                     return sent_update # Return immediately after handling files
 
             # --- Handle Text (if no files were handled) ---
             if AppKit.NSPasteboardTypeString in types:
                 text = self.pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
-                if text: # Ensure text is not empty
+                if text and self.connected_clients: # Ensure text is not empty and we have connected clients
                     # Anti-loop check: Compare with last received remote hash
                     content_hash = hashlib.md5(text.encode()).hexdigest()
                     if (self.last_remote_content_hash == content_hash and

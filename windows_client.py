@@ -16,10 +16,6 @@ from handlers.file_handler import FileHandler
 from utils.platform_config import verify_platform, IS_WINDOWS
 from config import ClipboardConfig
 from handlers.file_handler import FileHandler
-from utils.connection_utils import ConnectionManager
-from utils.constants import ConnectionStatus
-from utils.message_format import ClipMessage, MessageType
-from utils.network.discovery import DeviceDiscovery
 from utils.platform_config import verify_platform, IS_WINDOWS
 from config import ClipboardConfig
 import tempfile
@@ -385,32 +381,25 @@ class WindowsClipboardClient:
                 if token:
                     self._save_device_token(token)
                     self.device_token = token
-                    print(f"🆕 设备已授权并获取令牌")
+                    print(f"🎉 设备配对成功并获取授权令牌!")
                     return True
                 else:
-                    print(f"❌ 服务器在首次授权时未提供令牌")
+                    print(f"❌ 服务器在配对成功时未提供令牌")
                     return False
+            elif status == 'pairing_rejected':
+                print(f"❌ 配对被服务器拒绝: {response_data.get('reason', '未知原因')}")
+                return False
+            elif status == 'pairing_expired':
+                print(f"⏰ 配对请求超时: {response_data.get('reason', '未知原因')}")
+                print("请重新尝试连接并确保及时在服务器端确认配对")
+                return False
             else:
                 reason = response_data.get('reason', '未知原因')
                 print(f"❌ 身份验证失败: {reason}")
-                # 修复：如果令牌无效，完全重置身份验证状态
-                if not is_first_time and 'signature' in reason.lower():
-                    print("ℹ️ 本地令牌可能已失效，将尝试清除并重新注册...")
-                    try:
-                        token_path = self._get_token_path()
-                        if token_path.exists():
-                            token_path.unlink()
-                            print(f"🗑️ 已删除本地令牌文件: {token_path}")
-                        self.device_token = None  # 重置内存中的令牌
-                        print("🔄 下次连接将作为新设备重新注册")
-                    except Exception as e:
-                        print(f"⚠️ 删除本地令牌文件失败: {e}")
                 return False
+                
         except asyncio.TimeoutError:
-            print("❌ 等待身份验证响应超时")
-            return False
-        except json.JSONDecodeError:
-            print("❌ 无效的身份验证响应格式")
+            print("❌ 等待配对响应超时 (可能需要在服务器端手动确认)")
             return False
         except Exception as e:
             print(f"❌ 身份验证过程中出错: {e}")
